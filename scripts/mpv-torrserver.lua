@@ -199,7 +199,12 @@ end
 
 mp.add_hook("on_load", 5, function()
     local url = mp.get_property("stream-open-filename")
-    if url:find("^magnet:") == 1 or (url:find("^https?://") == 1 and url:find("%.torrent$") ~= nil) then
+    local magnet_pos = url:find("magnet:%?xt=")
+    local real_url = magnet_pos and url:sub(magnet_pos) or url
+    if real_url:find("^magnet:") == 1 or (url:find("^https?://") == 1 and url:find("%.torrent$") ~= nil) then
+        url = real_url
+        mp.set_property("stream-open-filename", url)
+        mp.msg.info("检测到磁力链接: " .. tostring(real_url) .. "，正在获取种子信息...")
         mp.set_property_bool("file-local-options/ytdl", false)
         if opts.torrserver_init then init() end
         local magnet_info, err = get_magnet_info(url)
