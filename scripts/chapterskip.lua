@@ -389,16 +389,19 @@ render_button = function()
     local scale = screen_height / 1080    local button_padding_x = o.button_padding_x * scale
     local button_padding_y = o.button_padding_y * scale
     local font_size = o.button_font_size * scale
-    local hint_font_size = font_size * 0.9  -- Smaller font for hint
+ -- local hint_font_size = font_size * 0.9  -- Smaller font for hint
 
     -- Calculate button dimensions with hint text
     local message_width = #button_state.message * font_size * 0.6
-    local hint_text = "[y/n]"
-    local hint_width = #hint_text * hint_font_size * 0.6
-    local max_text_width = math.max(message_width, hint_width)
-    local button_width = max_text_width + button_padding_x * 2
-    local line_spacing = font_size * 0.1
-    local button_height = font_size + line_spacing + hint_font_size + button_padding_y * 2
+--    local hint_text = "[y/n]"
+--    local hint_width = #hint_text * hint_font_size * 0.6
+--    local max_text_width = math.max(message_width, hint_width)
+--    local button_width = max_text_width + button_padding_x * 2
+--    local line_spacing = font_size * 0.1
+--    local button_height = font_size + line_spacing + hint_font_size + button_padding_y * 2
+    
+    local button_width = message_width + button_padding_x * 2
+    local button_height = font_size + button_padding_y * 2
 
     -- Position button: bottom right, same as notify_skip
     local margin = o.button_margin * scale
@@ -480,18 +483,19 @@ render_button = function()
 
     -- Draw text (main message)
     local text_x = button_x + button_width / 2
-    local text_y = button_y + button_height / 2 - (hint_font_size + line_spacing) / 2
+    local text_y = button_y + button_height / 2
+ -- local text_y = button_y + button_height / 2 - (hint_font_size + line_spacing) / 2
     ass:new_event()
     ass:append("{\\an5\\fs" .. font_size .. "\\b1\\bord0\\shad0\\1c&H" .. text_color .. "&}")
     ass:pos(text_x, text_y)
     ass:append(button_state.message)
 
     -- Draw keyboard hint (second line)
-    local hint_y = text_y + font_size / 2 + line_spacing + hint_font_size / 2
-    ass:new_event()
-    ass:append("{\\an5\\fs" .. hint_font_size .. "\\b0\\bord0\\shad0\\1c&H" .. text_color .. "&\\alpha&H80&}")
-    ass:pos(text_x, hint_y)
-    ass:append(hint_text)
+--    local hint_y = text_y + font_size / 2 + line_spacing + hint_font_size / 2
+--    ass:new_event()
+--    ass:append("{\\an5\\fs" .. hint_font_size .. "\\b0\\bord0\\shad0\\1c&H" .. text_color .. "&\\alpha&H80&}")
+--    ass:pos(text_x, hint_y)
+--    ass:append(hint_text)
 
     local ass_text = ass.text
 
