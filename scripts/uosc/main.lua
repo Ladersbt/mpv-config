@@ -1,5 +1,5 @@
 --[[ uosc | https://github.com/tomasklaen/uosc ]]
-local uosc_version = '5.12.0'
+local uosc_version = '5.12.1'
 
 mp.commandv('script-message', 'uosc-version', uosc_version)
 
@@ -104,6 +104,9 @@ defaults = {
 	subtitles_directory = '~~/subtitles',
 	disable_elements = '',
 	ziggy_path = 'default',
+	
+	thumbnail_provider = 'thumb_engine',
+	thumbnail_mode = "natural",
 }
 options = table_copy(defaults)
 function handle_options(changed_options)
@@ -726,7 +729,7 @@ mp.observe_property('window-maximized', 'bool', create_state_setter('maximized',
 mp.observe_property('idle-active', 'bool', function(_, idle)
 	set_state('is_idle', idle)
 	Elements:trigger('dispositions')
-	mp.commandv('script-message-to', 'thumbfast', 'clear')
+	mp.commandv('script-message-to', options.thumbnail_provider, 'clear')
 end)
 mp.observe_property('pause', 'bool', create_state_setter('pause', function() file_end_timer:kill() end))
 mp.observe_property('volume', 'number', create_state_setter('volume'))
@@ -947,7 +950,10 @@ bind_command('show-in-directory', function()
 	if not state.path or is_protocol(state.path) then return end
 
 	if state.platform == 'windows' then
-		utils.subprocess_detached({args = {'explorer', '/select,', state.path .. ' '}, cancellable = false})
+	 -- utils.subprocess_detached({args = {'explorer', '/select,', state.path .. ' '}, cancellable = false})
+	 -- 改为 OneCommander
+	    local dir_path = serialize_path(state.path).dirname
+		utils.subprocess_detached({args = {'OneCommander', dir_path}, cancellable = false})
 	elseif state.platform == 'darwin' then
 		utils.subprocess_detached({args = {'open', '-R', state.path}, cancellable = false})
 	elseif state.platform == 'linux' then
@@ -1069,7 +1075,9 @@ bind_command('open-config-directory', function()
 		local args
 
 		if state.platform == 'windows' then
-			args = {'explorer', '/select,', config.path}
+		 -- args = {'explorer', '/select,', config.path}
+	     -- 改为 OneCommander
+	        args = {'OneCommander', config.dirname}
 		elseif state.platform == 'darwin' then
 			args = {'open', '-R', config.path}
 		elseif state.platform == 'linux' then
@@ -1129,11 +1137,11 @@ mp.register_script_message('menu-action', function(name, ...)
 		if method then menu[method](menu, ...) end
 	end
 end)
-mp.register_script_message('thumbfast-info', function(json)
+mp.register_script_message(options.thumbnail_provider .. '-info', function(json)
 	local data = utils.parse_json(json)
 	if type(data) ~= 'table' or not data.width or not data.height then
 		thumbnail.disabled = true
-		msg.error('thumbfast-info: received json didn\'t produce a table with thumbnail information')
+		msg.error(options.thumbnail_provider .. '-info: received json didn\'t produce a table with thumbnail information')
 	else
 		thumbnail = data
 		request_render()
