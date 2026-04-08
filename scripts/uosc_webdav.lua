@@ -24,6 +24,8 @@ local sub_exts = {
     sup = true, sub = true, idx = true, smi = true, lrc = true
 }
 
+-- ============================================
+
 -- slang 优先级顺序，靠前的优先 select
 local slang = {"jpsc","chs","sc","zh-hans","zh-cn","jptc","cht","tc","zh-hant","zh-hk","zh-tw","chi","zho","zh"}
 local function slang_priority(name)
@@ -33,10 +35,13 @@ local function slang_priority(name)
     end
     return #slang + 1
 end
--- ============================================
 
 local last_visited_url = opts.url
 local protocol, domain = opts.url:match("^(https?://)([^/]+)")
+if not protocol or not domain then
+    msg.error("WebDAV URL 配置无效: " .. tostring(opts.url))
+    return
+end
 local auth_prefix = protocol .. opts.user .. ":" .. opts.pass .. "@" .. domain
 
 local function url_decode(str)
@@ -55,9 +60,26 @@ local sync_playlist_sort = false
 local file_loaded_registered = false
 local active_playlist_obs_id = nil
 local menu_is_open = false       -- 追踪菜单是否已打开，决定用 open-menu 还是 update-menu
+local delete_job = {
+    active  = false,
+    total   = 0,
+    done    = 0,
+    success = 0,
+    fail    = 0,
+    queue   = nil,
+}
+local dir_cache  = {} 
+local dir_cursor = {} 
+local dir_sort   = {} 
 
 -- ================= 排序相关 =================
-local sort_mode = opts.default_sort
+-- [CHANGE] 删除全局 sort_mode，改用 dir_sort[current_loaded_url]，通过helper读写
+local function get_sort_mode()
+    return dir_sort[current_loaded_url] or opts.default_sort
+end
+local function set_sort_mode(m)
+    dir_sort[current_loaded_url] = m
+end
 
 local month_map = {
     Jan=1, Feb=2, Mar=3, Apr=4, May=5, Jun=6,
@@ -95,16 +117,25 @@ local function parse_lastmod(s)
          + tonumber(m)
 end
 
+local function copy_items(src)
+    local dst = {}
+    for i, item in ipairs(src or {}) do
+        dst[i] = item
+    end
+    return dst
+end
+
 local function apply_sort()
+    local m = get_sort_mode()  -- [CHANGE] 用当前目录自己的排序
     table.sort(cached_dir_items, function(a, b)
         if a.is_dir ~= b.is_dir then return a.is_dir end
-        if sort_mode == "name_desc" then
+        if m == "name_desc" then
             return natural_compare(b.name, a.name)
-        elseif sort_mode == "time_desc" then
+        elseif m == "time_desc" then
             local ta, tb2 = parse_lastmod(a.lastmod), parse_lastmod(b.lastmod)
             if ta ~= tb2 then return ta > tb2 end
             return natural_compare(a.name, b.name)
-        elseif sort_mode == "time_asc" then
+        elseif m == "time_asc" then
             local ta, tb2 = parse_lastmod(a.lastmod), parse_lastmod(b.lastmod)
             if ta ~= tb2 then return ta < tb2 end
             return natural_compare(a.name, b.name)
@@ -133,7 +164,7 @@ end
 
 -- uosc 分隔线（不可点击的灰色细线条目）
 local function separator_item()
-    return { title = "─────────────────", selectable = false, muted = true, value = "" }
+    return { title = " ─────────────────", selectable = false, muted = true }
 end
 
 -- ===== 自动挂载字幕（模拟 sub-auto=fuzzy + slang 优先级）=====
@@ -168,33 +199,32 @@ local function attach_subs_for(video_play_url)
         local flag = (i == 1) and "select" or "auto"
         mp.commandv("sub-add", item.play_url, flag, item.name)
     end
-    
-    msg.info(string.format("视频已挂载 %d 条外挂字幕", #matched, vstem))
+    msg.info(string.format("视频已挂载 %d 条外挂字幕", #matched))
 end
 
 -- ===== 渲染菜单 =====
 local function render_menu()
     local path_part = current_loaded_url ~= "" and current_loaded_url:match("https?://[^/]+(/.*)") or nil
     local current_path_decoded = path_part and url_decode(path_part) or "/"
+    
+    -- 提前统计，供顶部功能区和 footnote 共用
+    local sel_file_count = 0
+    local sel_dir_count  = 0
+    for _ in pairs(selected_files) do sel_file_count = sel_file_count + 1 end
+    for _ in pairs(selected_dirs)  do sel_dir_count  = sel_dir_count  + 1 end
+    local sel_count      = sel_file_count + sel_dir_count
+
+    local video_count       = 0
+    local total_selectable  = #cached_dir_items
+    for _, item in ipairs(cached_dir_items) do
+        if not item.is_dir and item.is_video then video_count = video_count + 1 end
+    end
 
     local items = {}
 
     -- ---- 顶部功能区 ----
     if is_delete_mode then
-        local sel_file_count = 0
-        local sel_dir_count  = 0
-        for _ in pairs(selected_files) do sel_file_count = sel_file_count + 1 end
-        for _ in pairs(selected_dirs)  do sel_dir_count  = sel_dir_count  + 1 end
-        local sel_count = sel_file_count + sel_dir_count
-
-        local total_files = 0
-        local total_dirs  = 0
-        for _, item in ipairs(cached_dir_items) do
-            if item.is_dir then total_dirs = total_dirs + 1
-            else total_files = total_files + 1 end
-        end
-        local total_selectable = total_files + total_dirs
-
+    
         -- 全选 / 全不选切换
         local all_selected = (sel_count == total_selectable) and total_selectable > 0
         table.insert(items, {
@@ -222,8 +252,7 @@ local function render_menu()
         else
             table.insert(items, {
                 title = "⚠️ 请在下方勾选要删除的项目",
-                value = "",
-                keep_open = true
+                selectable = false
             })
         end
 
@@ -257,7 +286,7 @@ local function render_menu()
             keep_open = true
         })
         table.insert(items, {
-            title = "📶 排序: " .. (sort_labels[sort_mode] or sort_mode),
+            title = "📶 排序: " .. (sort_labels[get_sort_mode()] or get_sort_mode()),  -- [CHANGE]
             value = "script-message webdav-cycle-sort",
             keep_open = true
         })
@@ -279,7 +308,8 @@ local function render_menu()
             else
                 table.insert(items, {
                     title = "📁 " .. item.name,
-                    value = string.format("script-message webdav-open %q", item.url),
+                    value = string.format("script-message webdav-open %q %q %q",
+                        item.url, "false", item.url),  -- [CHANGE] 第3参数改传子目录URL
                     keep_open = false
                 })
             end
@@ -303,137 +333,244 @@ local function render_menu()
             end
         end
     end
+    
+    -- 空目录提示
+    if #cached_dir_items == 0 then
+        table.insert(items, {
+            title = "📂 空目录",
+            selectable = false,
+            muted = true,
+            value = ""
+        })
+    end
+
+    -- [CHANGE] selected_index：从dir_cursor取上次进入的子目录URL，动态找它在菜单里的行号
+    local selected_index = 1
+    local cursor_child_url = dir_cursor[current_loaded_url]
+    if cursor_child_url then
+        for idx, it in ipairs(items) do
+            -- 找到value里包含该子目录URL的那一行（文件夹条目）
+            if it.value and it.value:find(cursor_child_url, 1, true) then
+                selected_index = idx
+                break
+            end
+        end
+    end
 
     local menu = {
         type            = "webdav_browser",
         title           = (is_delete_mode and "【批量删除】 " or "WebDAV: ") .. current_path_decoded,
         items           = items,
+        selected_index  = selected_index,  -- [CHANGE]
         search_style    = "on_demand",
         search_debounce = 300,
     }
 
-    if menu_is_open then
-        mp.commandv("script-message-to", "uosc", "update-menu", utils.format_json(menu))
+    if is_delete_mode then
+        menu.footnote = string.format("已选择 %d 个项目", sel_count)
     else
-        menu_is_open = true
-        mp.commandv("script-message-to", "uosc", "open-menu", utils.format_json(menu))
+        -- [CHANGE] footnote 分类显示，0项不显示，全空则提示空目录
+		local dir_count   = 0
+		local other_count = 0
+		for _, item in ipairs(cached_dir_items) do
+			if item.is_dir then
+				dir_count = dir_count + 1
+			elseif not item.is_video then
+				other_count = other_count + 1
+			end
+		end
+		local parts = {}
+		if dir_count   > 0 then table.insert(parts, string.format("📁 %d 个文件夹", dir_count))  end
+		if video_count > 0 then table.insert(parts, string.format("🎬 %d 个视频",   video_count)) end
+		if other_count > 0 then table.insert(parts, string.format("📄 %d 个其他文件",   other_count)) end
+		menu.footnote = #parts > 0 and table.concat(parts, "　") or "📂 空目录"
     end
+    
+    -- 菜单已打开时用 update-menu 原地刷新（无闪烁），首次用 open-menu
+    local menu_json = utils.format_json(menu)
+
+    if menu_is_open then
+        mp.commandv("script-message-to", "uosc", "update-menu", menu_json)
+    else
+        mp.commandv("script-message-to", "uosc", "open-menu", menu_json)
+        menu_is_open = true
+    end    
 end
 
 -- ===== 获取目录并解析 =====
 local function open_webdav_url(target_url, force_refresh)
-    if target_url ~= current_loaded_url or force_refresh then
-        is_delete_mode = false
-        selected_files = {}
-        selected_dirs  = {}
-        cached_dir_items = {}
-        current_loaded_url = target_url
-        last_visited_url = target_url
+    local prev_url = current_loaded_url
+    local prev_items = cached_dir_items
+    local prev_delete_mode = is_delete_mode
+    local prev_selected_files = selected_files
+    local prev_selected_dirs = selected_dirs
 
-        mp.osd_message("⏳ 正在加载 WebDAV 目录...", 2)
-
-        -- 用 -w 在 body 末尾附加 HTTP 状态码，方便解析
-        local args = {
-            "curl", "-s",
-            "-w", "\n---HTTP_CODE---%{http_code}",
-            "-X", "PROPFIND",
-            "-u", opts.user .. ":" .. opts.pass,
-            "-H", "Depth: 1",
-            "--max-time", "10",
-            target_url
-        }
-        local res = mp.command_native({
-            name = "subprocess",
-            playback_only = false,
-            capture_stdout = true,
-            capture_stderr = true,
-            args = args
-        })
-
-        -- ---- 错误分层判断：先看 curl 自身是否出错 ----
-        if res.status ~= 0 then
-            local code = res.status
-            local hint
-            if     code ==  6 then hint = "无法解析主机名，请检查 URL 中的域名/IP"
-            elseif code ==  7 then hint = "连接被拒绝，请确认服务正在运行且端口正确"
-            elseif code == 28 then hint = "连接超时，请检查网络或防火墙"
-            elseif code == 35 or code == 51 or code == 60
-                               then hint = "SSL/TLS 握手失败，证书可能有问题"
-            elseif code == 67 then hint = "认证失败，请检查用户名和密码"
-            else                    hint = string.format("curl 错误码 %d", code) end
-            mp.osd_message("❌ " .. hint, 5)
-            msg.error("WebDAV curl error " .. code .. ": " .. (res.stderr or ""))
-            return
-        end
-
-        -- ---- 解析 HTTP 状态码 ----
-        local body, http_code_str = res.stdout:match("^(.*)\n---HTTP_CODE---(%d+)$")
-        if not body then
-            body = res.stdout
-            http_code_str = "0"
-        end
-        local http_code = tonumber(http_code_str) or 0
-
-        if     http_code == 401 then mp.osd_message("❌ 认证失败 (401)，请检查用户名和密码", 5); return
-        elseif http_code == 403 then mp.osd_message("❌ 无访问权限 (403)", 4); return
-        elseif http_code == 404 then mp.osd_message("❌ 路径不存在 (404)，请检查 WebDAV URL", 4); return
-        elseif http_code == 405 then mp.osd_message("❌ 服务器不支持 PROPFIND (405)，请确认 WebDAV 服务已启用", 4); return
-        elseif http_code >= 500 then mp.osd_message(string.format("❌ 服务器内部错误 (%d)", http_code), 4); return
-        elseif http_code ~= 207 then mp.osd_message(string.format("❌ 意外的 HTTP 响应码 %d", http_code), 4); return
-        end
-
-        -- ---- 解析 PROPFIND XML ----
-        local current_path_decoded = url_decode(target_url:match("https?://[^/]+(/.*)") or "/")
-        local norm_current = current_path_decoded:gsub("/$", "")
-
-        for block in body:gmatch("<[Dd]:[Rr]esponse>(.-)</[Dd]:[Rr]esponse>") do
-            local raw_href = block:match("<[Dd]:[Hh]ref>([^<]+)</[Dd]:[Hh]ref>")
-            if not raw_href then goto continue end
-
-            local lastmod_str = block:match("<[Dd]:[Gg]etlastmodified>([^<]+)</[Dd]:[Gg]etlastmodified>") or ""
-            local size_str    = block:match("<[Dd]:[Gg]etcontentlength>([^<]+)</[Dd]:[Gg]etcontentlength>") or ""
-
-            if raw_href:match("^https?://") then raw_href = raw_href:match("https?://[^/]+(/.*)") end
-            local decoded_href = url_decode(raw_href)
-            local norm_decoded = decoded_href:gsub("/$", "")
-
-            if norm_decoded ~= norm_current then
-                local is_dir = raw_href:sub(-1) == "/"
-                local name   = decoded_href:match("([^/]+)/?$") or decoded_href
-
-                if is_dir then
-                    table.insert(cached_dir_items, {
-                        is_dir  = true,
-                        name    = name,
-                        url     = protocol .. domain .. raw_href,
-                        lastmod = lastmod_str
-                    })
-                else
-                    local ext       = name:match("%.([^%.]+)$")
-                    local ext_lower = ext and ext:lower()
-                    local is_video  = ext_lower and video_exts[ext_lower]
-                    local is_sub    = ext_lower and sub_exts[ext_lower]
-                    local icon      = is_video and "🎬" or "📄"
-                    table.insert(cached_dir_items, {
-                        is_dir   = false,
-                        name     = name,
-                        play_url = auth_prefix .. raw_href,
-                        file_url = protocol .. domain .. raw_href,
-                        lastmod  = lastmod_str,
-                        size     = size_str,
-                        is_video = is_video,
-                        is_sub   = is_sub,
-                        icon     = icon
-                    })
-                end
-            end
-            ::continue::
-        end
-
-        apply_sort()
+    local function restore_prev()
+        current_loaded_url = prev_url
+        if prev_url ~= "" then
+			last_visited_url = prev_url
+		end
+        cached_dir_items = prev_items
+        is_delete_mode = prev_delete_mode
+        selected_files = prev_selected_files
+        selected_dirs = prev_selected_dirs
+        menu_is_open = false
+        render_menu()
     end
 
-    -- 切换目录时必须重新 open-menu（新的 type/title），重置标志
+    -- 直接命中缓存
+    if not force_refresh and dir_cache[target_url] then
+        cached_dir_items = copy_items(dir_cache[target_url].items)
+        current_loaded_url = target_url
+        last_visited_url = target_url
+        is_delete_mode = false
+        selected_files = {}
+        selected_dirs = {}
+        menu_is_open = false
+        apply_sort()
+        render_menu()
+        return
+    end
+
+    mp.osd_message("⏳ 正在加载 WebDAV 目录...", 2)
+
+    -- 先把解析结果放到临时表里，成功后再写回全局
+    local new_items = {}
+
+    local args = {
+        "curl", "-s",
+        "-w", "\n---HTTP_CODE---%{http_code}",
+        "-X", "PROPFIND",
+        "-u", opts.user .. ":" .. opts.pass,
+        "-H", "Depth: 1",
+        "--max-time", "10",
+        target_url
+    }
+
+    local res = mp.command_native({
+        name = "subprocess",
+        playback_only = false,
+        capture_stdout = true,
+        capture_stderr = true,
+        args = args
+    })
+
+    -- curl 自身错误
+    if res.status ~= 0 then
+        local code = res.status
+        local hint
+        if     code ==  6 then hint = "无法解析主机名，请检查 URL 中的域名/IP"
+        elseif code ==  7 then hint = "连接被拒绝，请确认服务正在运行且端口正确"
+        elseif code == 28 then hint = "连接超时，请检查网络或防火墙"
+        elseif code == 35 or code == 51 or code == 60 then hint = "SSL/TLS 握手失败，证书可能有问题"
+        elseif code == 67 then hint = "认证失败，请检查用户名和密码"
+        else hint = string.format("curl 错误码 %d", code) end
+
+        mp.osd_message("❌ " .. hint, 5)
+        msg.error("WebDAV curl error " .. code .. ": " .. (res.stderr or ""))
+        restore_prev()
+        return
+    end
+
+    -- 解析 HTTP 状态码
+    local body, http_code_str = res.stdout:match("^(.*)\n---HTTP_CODE---(%d+)$")
+    if not body then
+        body = res.stdout
+        http_code_str = "0"
+    end
+    local http_code = tonumber(http_code_str) or 0
+
+    if     http_code == 401 then
+        mp.osd_message("❌ 认证失败 (401)，请检查用户名和密码", 5)
+        restore_prev()
+        return
+    elseif http_code == 403 then
+        mp.osd_message("❌ 无访问权限 (403)", 4)
+        restore_prev()
+        return
+    elseif http_code == 404 then
+        mp.osd_message("❌ 路径不存在 (404)，请检查 WebDAV URL", 4)
+        restore_prev()
+        return
+    elseif http_code == 405 then
+        mp.osd_message("❌ 服务器不支持 PROPFIND (405)，请确认 WebDAV 服务已启用", 4)
+        restore_prev()
+        return
+    elseif http_code >= 500 then
+        mp.osd_message(string.format("❌ 服务器内部错误 (%d)", http_code), 4)
+        restore_prev()
+        return
+    elseif http_code ~= 207 then
+        mp.osd_message(string.format("❌ 意外的 HTTP 响应码 %d", http_code), 4)
+        restore_prev()
+        return
+    end
+
+    -- 解析 PROPFIND XML
+    local current_path_decoded = url_decode(target_url:match("https?://[^/]+(/.*)") or "/")
+    local norm_current = current_path_decoded:gsub("/$", "")
+
+    for block in body:gmatch("<[Dd]:[Rr]esponse>(.-)</[Dd]:[Rr]esponse>") do
+        local raw_href = block:match("<[Dd]:[Hh]ref>([^<]+)</[Dd]:[Hh]ref>")
+        if not raw_href then goto continue end
+
+        local lastmod_str = block:match("<[Dd]:[Gg]etlastmodified>([^<]+)</[Dd]:[Gg]etlastmodified>") or ""
+        local size_str    = block:match("<[Dd]:[Gg]etcontentlength>([^<]+)</[Dd]:[Gg]etcontentlength>") or ""
+
+        if raw_href:match("^https?://") then
+            raw_href = raw_href:match("https?://[^/]+(/.*)")
+        end
+
+        local decoded_href = url_decode(raw_href)
+        local norm_decoded = decoded_href:gsub("/$", "")
+
+        if norm_decoded ~= norm_current then
+            local is_dir = raw_href:sub(-1) == "/"
+            local name   = decoded_href:match("([^/]+)/?$") or decoded_href
+
+            if is_dir then
+                table.insert(new_items, {
+                    is_dir  = true,
+                    name    = name,
+                    url     = protocol .. domain .. raw_href,
+                    lastmod = lastmod_str
+                })
+            else
+                local ext        = name:match("%.([^%.]+)$")
+                local ext_lower   = ext and ext:lower()
+                local is_video    = ext_lower and video_exts[ext_lower]
+                local is_sub      = ext_lower and sub_exts[ext_lower]
+                local icon        = is_video and "🎬" or "📄"
+
+                table.insert(new_items, {
+                    is_dir   = false,
+                    name     = name,
+                    play_url = auth_prefix .. raw_href,
+                    file_url = protocol .. domain .. raw_href,
+                    lastmod  = lastmod_str,
+                    size     = size_str,
+                    is_video = is_video,
+                    is_sub   = is_sub,
+                    icon     = icon
+                })
+            end
+        end
+
+        ::continue::
+    end
+
+    -- 成功后一次性写回
+    is_delete_mode = false
+    selected_files = {}
+    selected_dirs  = {}
+    cached_dir_items = new_items
+    current_loaded_url = target_url
+    last_visited_url = target_url
+
+    -- 缓存存“原始顺序”，别存已经排序过的结果
+    dir_cache[target_url] = { items = copy_items(new_items) }
+
+    apply_sort()
     menu_is_open = false
     render_menu()
 end
@@ -450,7 +587,7 @@ mp.register_script_message("webdav-toggle-mode", function()
     selected_files = {}
     selected_dirs  = {}
     if not is_delete_mode then
-        menu_is_open = false
+        menu_is_open = false  -- 退出删除模式时菜单已被关闭，强制重新 open-menu
     end
     render_menu()
 end)
@@ -484,7 +621,7 @@ mp.register_script_message("webdav-select-all", function(select_all_str)
 end)
 
 -- WebDAV DELETE 单次请求（文件夹加 Depth: infinity）
-local function webdav_delete(url, is_dir)
+local function webdav_delete_async(url, is_dir, cb)
     local args = {
         "curl", "-s", "-o", "/dev/null",
         "-w", "%{http_code}",
@@ -492,62 +629,112 @@ local function webdav_delete(url, is_dir)
         "-u", opts.user .. ":" .. opts.pass,
     }
     if is_dir then
-        -- RFC 4918：删除集合（文件夹）必须带 Depth: infinity
         table.insert(args, "-H")
         table.insert(args, "Depth: infinity")
     end
     table.insert(args, url)
 
-    local res = mp.command_native({
-        name = "subprocess", playback_only = false,
-        capture_stdout = true, args = args
-    })
-    local code = tonumber((res.stdout or ""):match("^%s*(%d+)%s*$")) or 0
-    return code == 200 or code == 204 or code == 207
+    mp.command_native_async({
+        name = "subprocess",
+        playback_only = false,
+        capture_stdout = true,
+        args = args
+    }, function(ok, res)
+        local code = tonumber((res and res.stdout or ""):match("^%s*(%d+)%s*$")) or 0
+        cb(code == 200 or code == 204 or code == 207)
+    end)
 end
 
 -- 执行批量删除
 mp.register_script_message("webdav-execute-delete", function()
-    local sel_count = 0
-    for _ in pairs(selected_files) do sel_count = sel_count + 1 end
-    for _ in pairs(selected_dirs)  do sel_count = sel_count + 1 end
-    if sel_count == 0 then return end
+    if delete_job.active then return end
 
-    mp.osd_message(string.format("正在删除 %d 个项目...", sel_count), 3)
-
-    local success_count = 0
-
-    for file_url in pairs(selected_files) do
-        msg.info("DELETE file: " .. file_url)
-        if webdav_delete(file_url, false) then success_count = success_count + 1
-        else msg.warn("删除文件失败: " .. file_url) end
+    local delete_list = {}
+    for _, item in ipairs(cached_dir_items) do
+        if item.is_dir and selected_dirs[item.url] then
+            table.insert(delete_list, { name = item.name, url = item.url, is_dir = true })
+        elseif not item.is_dir and selected_files[item.file_url] then
+            table.insert(delete_list, { name = item.name, url = item.file_url, is_dir = false })
+        end
     end
 
-    for dir_url in pairs(selected_dirs) do
-        msg.info("DELETE dir: " .. dir_url)
-        if webdav_delete(dir_url, true) then success_count = success_count + 1
-        else msg.warn("删除文件夹失败: " .. dir_url) end
+    if #delete_list == 0 then
+        mp.osd_message("⚠️ 没有选中任何项目", 2)
+        return
     end
 
-    mp.osd_message(string.format("删除完毕，成功 %d/%d", success_count, sel_count), 3)
+    delete_job.active  = true
+    delete_job.total   = #delete_list
+    delete_job.done    = 0
+    delete_job.success = 0
+    delete_job.fail    = 0
+    delete_job.queue   = delete_list
 
     is_delete_mode = false
     selected_files = {}
     selected_dirs  = {}
-    open_webdav_url(current_loaded_url, true)
+    mp.commandv("script-message-to", "uosc", "close-menu", "webdav_browser")
+    menu_is_open = false
+
+    mp.osd_message(string.format("🗑️ 开始删除 %d 个项目...", delete_job.total), 2)
+
+    local function delete_next()
+        if not delete_job.active then return end
+
+        local item = table.remove(delete_job.queue, 1)
+        if not item then
+            -- 全部完成
+            local msg_str = string.format("✅ 删除完成：成功 %d，失败 %d",
+                delete_job.success, delete_job.fail)
+            mp.osd_message(msg_str, 4)
+            msg.info(msg_str)
+            delete_job.active = false
+            dir_cache[current_loaded_url] = nil
+            open_webdav_url(current_loaded_url, true)
+            return
+        end
+
+        delete_job.done = delete_job.done + 1
+        mp.osd_message(string.format("🗑️ 删除中 %d/%d：%s",
+            delete_job.done, delete_job.total, item.name), 2)
+        msg.info(string.format("DELETE %s: %s",
+            item.is_dir and "dir" or "file", item.url))
+
+        webdav_delete_async(item.url, item.is_dir, function(ok)
+            if ok then
+                delete_job.success = delete_job.success + 1
+                msg.info("删除成功: " .. item.url)
+            else
+                delete_job.fail = delete_job.fail + 1
+                msg.warn("删除失败: " .. item.url)
+            end
+            delete_next()
+        end)
+    end
+
+    delete_next()
 end)
 
 -- 打开目录
-mp.register_script_message("webdav-open", function(url, force)
+mp.register_script_message("webdav-open", function(url, force, child_url)
+    -- [CHANGE] child_url 现在是子目录的URL字符串，记录"从当前目录进入了哪个子目录"
+    if child_url and child_url ~= "" and current_loaded_url ~= "" then
+        dir_cursor[current_loaded_url] = child_url
+    end
+    -- [CHANGE] 返回根目录时清空所有光标记录
+    if url == opts.url then
+        dir_cursor = {}
+    end
     open_webdav_url(url, force == "true")
 end)
 
 -- 循环切换排序
 mp.register_script_message("webdav-cycle-sort", function()
     local modes = {"time_asc", "time_desc", "name_desc", "name_asc"}
+    local cur = get_sort_mode()  -- [CHANGE] 读当前目录排序
     for i, m in ipairs(modes) do
-        if m == sort_mode then
-            sort_mode = modes[(i % #modes) + 1]
+        if m == cur then
+            set_sort_mode(modes[(i % #modes) + 1])  -- [CHANGE] 只写当前目录
             break
         end
     end
@@ -607,7 +794,7 @@ mp.register_script_message("webdav-play", function(play_url, is_video)
     end
 
     local mode_hint = sync_playlist_sort
-        and ("继承 WebDAV 目录排序: " .. sort_labels[sort_mode]) or "名称 A→Z"
+        and ("继承 WebDAV 目录排序: " .. sort_labels[get_sort_mode()]) or "名称 A→Z"  -- [CHANGE]
     local file_label = opts.video_only and "个视频" or "个文件"
     mp.osd_message("🎬 播放列表共 " .. #file_items .. " " .. file_label .. " [" .. mode_hint .. "]", 3)
 
@@ -654,16 +841,25 @@ end)
 mp.register_script_message("webdav-toggle-sync-sort", function()
     sync_playlist_sort = not sync_playlist_sort
     local state = sync_playlist_sort
-        and ("开 (继承 WebDAV 目录排序: " .. sort_labels[sort_mode] .. ")") or "关 (名称 A→Z)"
+        and ("开 (继承 WebDAV 目录排序: " .. sort_labels[get_sort_mode()] .. ")") or "关 (名称 A→Z)"
     mp.osd_message("🎬 播放列表排序继承: " .. state, 2)
-end)
-
-mp.register_script_message("open-webdav", function()
-    open_webdav_url(last_visited_url, false)
 end)
 
 mp.register_script_message("webdav-toggle-video-only", function()
     opts.video_only = not opts.video_only
     local state = opts.video_only and "开 (仅视频)" or "关 (全部文件)"
     mp.osd_message("🎬 仅播放视频: " .. state, 2)
+end)
+
+mp.register_script_message("open-webdav", function()
+    open_webdav_url(last_visited_url, false)
+end)
+
+mp.register_script_message("open-webdav-root", function()
+    if current_loaded_url == opts.url then
+        mp.osd_message("📂 已在根目录", 1)
+        return
+    end
+    dir_cursor = {}
+    open_webdav_url(opts.url, false)
 end)
