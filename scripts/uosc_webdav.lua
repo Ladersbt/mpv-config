@@ -1,8 +1,13 @@
+-- uosc_webdav.lua
+
+
 local utils = require 'mp.utils'
 local msg = require 'mp.msg'
 local options = require 'mp.options'
 
+
 -- ================= 配置区域 =================
+
 local opts = {
     url = "http://192.168.1.100:8080/dav/", -- WebDAV 根目录地址，务必以 / 结尾
     user = "admin",                         -- 用户名
@@ -25,6 +30,7 @@ local sub_exts = {
 }
 
 -- ============================================
+
 
 -- slang 优先级顺序，靠前的优先 select
 local slang = {"jpsc","chs","sc","zh-hans","zh-cn","jptc","cht","tc","zh-hant","zh-hk","zh-tw","chi","zho","zh"}
@@ -68,11 +74,12 @@ local delete_job = {
     fail    = 0,
     queue   = nil,
 }
-local dir_cache  = {} 
-local dir_cursor = {} 
-local dir_sort   = {} 
+local dir_cache  = {}           -- url -> { items, timestamp }
+local dir_cursor = {}           -- url -> child_url (上次进入的子目录URL)   -- [CHANGE] 从行号改为子目录URL
+local dir_sort   = {}           -- url -> sort_mode (每个目录独立排序)      -- [CHANGE] 新增，替代全局sort_mode
 
 -- ================= 排序相关 =================
+
 -- [CHANGE] 删除全局 sort_mode，改用 dir_sort[current_loaded_url]，通过helper读写
 local function get_sort_mode()
     return dir_sort[current_loaded_url] or opts.default_sort
@@ -151,6 +158,7 @@ local sort_labels = {
     time_desc = "时间 新→旧",
     time_asc  = "时间 旧→新",
 }
+
 -- =============================================
 
 local function format_size(bytes_str)
@@ -841,7 +849,7 @@ end)
 mp.register_script_message("webdav-toggle-sync-sort", function()
     sync_playlist_sort = not sync_playlist_sort
     local state = sync_playlist_sort
-        and ("开 (继承 WebDAV 目录排序: " .. sort_labels[get_sort_mode()] .. ")") or "关 (名称 A→Z)"
+        and ("开 (继承 WebDAV 目录排序: " .. sort_labels[get_sort_mode()] .. ")") or "关 (名称 A→Z)"  -- [CHANGE]
     mp.osd_message("🎬 播放列表排序继承: " .. state, 2)
 end)
 
