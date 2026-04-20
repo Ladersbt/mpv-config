@@ -1,5 +1,5 @@
 -- uosc_webdav.lua
-
+-- 主要借助claude编写，参考和修改自 https://gist.github.com/HedioKojima/fdbfdd73570650b01c809afb5ae7829b 🙏🏻
 
 local utils = require 'mp.utils'
 local msg = require 'mp.msg'
@@ -74,7 +74,7 @@ local delete_job = {
     fail    = 0,
     queue   = nil,
 }
-local dir_cache  = {}           -- url -> { items, timestamp }
+local dir_cache  = {}           -- url -> { items }
 local dir_cursor = {}           -- url -> child_url (上次进入的子目录URL)   -- [CHANGE] 从行号改为子目录URL
 local dir_sort   = {}           -- url -> sort_mode (每个目录独立排序)      -- [CHANGE] 新增，替代全局sort_mode
 
@@ -170,9 +170,9 @@ local function format_size(bytes_str)
     else return n .. " B" end
 end
 
--- uosc 分隔线（不可点击的灰色细线条目）
+-- uosc 列表分隔
 local function separator_item()
-    return { title = " ─────────────────", selectable = false, muted = true }
+    return { title = "文件列表", hint = "排序：" .. (sort_labels[get_sort_mode()] or get_sort_mode()), selectable = false, muted = false }
 end
 
 -- ===== 自动挂载字幕（模拟 sub-auto=fuzzy + slang 优先级）=====
@@ -277,7 +277,7 @@ local function render_menu()
             if parent_path then
                 table.insert(items, {
                     title = "↩️ 返回上一级",
-                    value = string.format("script-message webdav-open %q", parent_path .. "/"),
+                    value = string.format("script-message webdav-go-back %q", parent_path .. "/"),
                     keep_open = false
                 })
             end
@@ -294,10 +294,38 @@ local function render_menu()
             keep_open = true
         })
         table.insert(items, {
-            title = "📶 排序: " .. (sort_labels[get_sort_mode()] or get_sort_mode()),  -- [CHANGE]
-            value = "script-message webdav-cycle-sort",
-            keep_open = true
-        })
+			title = "📶 切换排序",
+			items = {
+				{
+					title  = sort_labels["time_desc"],
+					hint   = get_sort_mode() == "time_desc" and "☑️" or "⬜",
+					value  = "script-message webdav-set-sort time_desc",
+					active = get_sort_mode() == "time_desc" and 1 or nil,
+					keep_open = false,
+				},
+				{
+					title  = sort_labels["time_asc"],
+					hint   = get_sort_mode() == "time_asc" and "☑️" or "⬜",
+					value  = "script-message webdav-set-sort time_asc",
+					active = get_sort_mode() == "time_asc" and 1 or nil,
+					keep_open = false,
+				},
+				{
+					title  = sort_labels["name_asc"],
+					hint   = get_sort_mode() == "name_asc" and "☑️" or "⬜",
+					value  = "script-message webdav-set-sort name_asc",
+					active = get_sort_mode() == "name_asc" and 1 or nil,
+					keep_open = false,
+				},
+				{
+					title  = sort_labels["name_desc"],
+					hint   = get_sort_mode() == "name_desc" and "☑️" or "⬜",
+					value  = "script-message webdav-set-sort name_desc",
+					active = get_sort_mode() == "name_desc" and 1 or nil,
+					keep_open = false,
+				},
+			},
+		})
     end
 
     -- ---- 分隔线（功能区 / 文件列表 之间）----
@@ -577,7 +605,7 @@ local function open_webdav_url(target_url, force_refresh)
 
     -- 缓存存“原始顺序”，别存已经排序过的结果
     dir_cache[target_url] = { items = copy_items(new_items) }
-
+    dir_cursor[target_url] = nil
     apply_sort()
     menu_is_open = false
     render_menu()
@@ -730,10 +758,15 @@ mp.register_script_message("webdav-open", function(url, force, child_url)
         dir_cursor[current_loaded_url] = child_url
     end
     -- [CHANGE] 返回根目录时清空所有光标记录
-    if url == opts.url then
-        dir_cursor = {}
-    end
+--    if url == opts.url then
+--        dir_cursor = {}
+--    end
     open_webdav_url(url, force == "true")
+end)
+
+mp.register_script_message("webdav-go-back", function(url)
+    dir_cursor[current_loaded_url] = nil
+    open_webdav_url(url, false)
 end)
 
 -- 循环切换排序
@@ -746,7 +779,16 @@ mp.register_script_message("webdav-cycle-sort", function()
             break
         end
     end
+    dir_cursor[current_loaded_url] = nil
     apply_sort()
+    render_menu()
+end)
+
+mp.register_script_message("webdav-set-sort", function(mode)
+    set_sort_mode(mode)
+    dir_cursor[current_loaded_url] = nil
+    apply_sort()
+    menu_is_open = false  -- 子菜单关闭后重新 open
     render_menu()
 end)
 
@@ -870,4 +912,14 @@ mp.register_script_message("open-webdav-root", function()
     end
     dir_cursor = {}
     open_webdav_url(opts.url, false)
+end)
+
+-- 返回上一级，可绑定快捷键
+mp.register_script_message("webdav-back", function()
+    if current_loaded_url == "" or current_loaded_url == opts.url then return end
+    local parent_path = current_loaded_url:match("^(.*)/[^/]+/?$")
+    if parent_path then
+        dir_cursor[current_loaded_url] = nil
+        open_webdav_url(parent_path .. "/", false)
+    end
 end)
