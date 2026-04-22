@@ -1,5 +1,15 @@
--- uosc_webdav.lua
--- 主要借助claude编写，参考和修改自 https://gist.github.com/HedioKojima/fdbfdd73570650b01c809afb5ae7829b 🙏🏻
+--[[    uosc_webdav.lua
+主要借助claude编写，参考和修改自 https://gist.github.com/HedioKojima/fdbfdd73570650b01c809afb5ae7829b 🙏🏻 
+
+快捷键示例:
+Alt+KP9          script-message open-webdav                                                                             #menu: 导航 > WebDAV > Open WebDAV
+Q                script-message open-webdav-root                                                                        #menu: 导航 > WebDAV > Open WebDAV Root
+q                script-message webdav-back                                                                             ## 返回上一级
+#                script-message webdav-toggle-sync-sort                                                                 #menu: 导航 > WebDAV > 开/关 继承 WebDAV 目录排序
+#                script-message webdav-toggle-video-only                                                                #menu: 导航 > WebDAV > 开/关 仅播放视频
+
+推荐写入 uosc控件 'command:cloud:script-message open-webdav?WebDAV' 于 uosc.conf
+]]
 
 local utils = require 'mp.utils'
 local msg = require 'mp.msg'
@@ -266,7 +276,7 @@ local function render_menu()
 
         -- 退出删除模式
         table.insert(items, {
-            title = "❌ 退出删除模式",
+            title = "↩️ 退出删除模式",
             value = "script-message webdav-toggle-mode",
             keep_open = false
         })
@@ -289,7 +299,7 @@ local function render_menu()
             keep_open = false
         })
         table.insert(items, {
-            title = "🗑️ 进入批量删除模式...",
+            title = "🗑️ 进入删除模式",
             value = "script-message webdav-toggle-mode",
             keep_open = true
         })
