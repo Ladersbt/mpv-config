@@ -187,7 +187,7 @@ local settings = {
   --%cursor = position of navigation
   --%plen = playlist length
   --%N = newline
-  playlist_header = "[%cursor/%plen]",
+  playlist_header = "播放列表 [%cursor/%plen]   |   %sort",
 
   --Playlist file templates
   --%pos = position of file with leading zeros
@@ -389,47 +389,49 @@ end
 local sort_modes = {
   {
     id="name-asc",
-    title="name ascending",
+    title="名称 A→Z",
     sort_fn=function (a, b, playlist)
       return alphanumsort(playlist[a].string, playlist[b].string)
     end,
   },
   {
     id="name-desc",
-    title="name descending",
+    title="名称 Z→A",
     sort_fn=function (a, b, playlist)
       return alphanumsort(playlist[b].string, playlist[a].string)
     end,
   },
   {
     id="date-asc",
-    title="date ascending",
+    title="时间 旧→新",
     sort_fn=function (a, b)
       return (get_file_info(a).mtime or 0) < (get_file_info(b).mtime or 0)
     end,
   },
   {
     id="date-desc",
-    title="date descending",
+    title="时间 新→旧",
     sort_fn=function (a, b)
       return (get_file_info(a).mtime or 0) > (get_file_info(b).mtime or 0)
     end,
   },
   {
     id="size-asc",
-    title="size ascending",
+    title="大小 小→大",
     sort_fn=function (a, b)
       return (get_file_info(a).size or 0) < (get_file_info(b).size or 0)
     end,
   },
   {
     id="size-desc",
-    title="size descending",
+    title="大小 大→小",
     sort_fn=function (a, b)
       return (get_file_info(a).size or 0) > (get_file_info(b).size or 0)
     end,
   },
 }
+
+local current_sort_mode = nil
 
 local sort_mode = 1
 for mode, sort_data in pairs(sort_modes) do
@@ -640,6 +642,7 @@ function parse_header(string)
                :gsub("%%cursor", cursor+1)
                :gsub("%%mediatitle", esc_title)
                :gsub("%%filename", esc_file)
+               :gsub("%%sort", current_sort_mode and sort_modes[current_sort_mode].title or "名称 A→Z")
                -- undo name escape
                :gsub("%%%%", "%%")
 end
@@ -1346,6 +1349,7 @@ function sortplaylist(startover)
   if startover then
     mp.set_property('playlist-pos', 0)
   end
+  current_sort_mode = sort_mode
   if playlist_visible then
     showplaylist()
   end
