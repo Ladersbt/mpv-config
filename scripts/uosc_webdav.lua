@@ -129,7 +129,7 @@ local function parse_lastmod(s)
     local day, mon, year, h, m = s:match("(%d+)%s+(%a+)%s+(%d+)%s+(%d+):(%d+):")
     if not day then return 0 end
     return (tonumber(year) or 0) * 100000000
-         + (month_map[mon] 或 0) * 1000000
+         + (month_map[mon] or 0) * 1000000
          + tonumber(day) * 10000
          + tonumber(h) * 100
          + tonumber(m)
@@ -437,7 +437,7 @@ local function render_menu()
     local menu_json = utils.format_json(menu)
 
     if menu_is_open then
-        mp.commandv("script-message-to"， "uosc", "update-menu", menu_json)
+        mp.commandv("script-message-to", "uosc", "update-menu", menu_json)
     else
         mp.commandv("script-message-to", "uosc", "open-menu", menu_json)
         menu_is_open = true
