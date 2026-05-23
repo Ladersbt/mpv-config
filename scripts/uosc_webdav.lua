@@ -1,14 +1,15 @@
 --[[    uosc_webdav.lua
-主要借助claude编写，参考和修改自 https://gist.github.com/HedioKojima/fdbfdd73570650b01c809afb5ae7829b 🙏🏻 
+主要借助 Claude 编写，参考和修改自 https://gist.github.com/HedioKojima/fdbfdd73570650b01c809afb5ae7829b 🙏🏻 
 
-快捷键示例:
-Alt+KP9          script-message open-webdav                                                                             #menu: 导航 > WebDAV > Open WebDAV
-Q                script-message open-webdav-root                                                                        #menu: 导航 > WebDAV > Open WebDAV Root
+input.conf 写法示例:
+#                script-message open-webdav                                                                             #menu: 导航 > WebDAV > 打开 WebDAV 目录
+Q                script-message open-webdav-root                                                                        #menu: 导航 > WebDAV > 回到 WebDAV 根目录
 q                script-message webdav-back                                                                             ## 返回上一级
+c                script-message webdav-cycle-sort                                                                       #menu: 导航 > WebDAV > 切换 WebDAV 目录排序
 #                script-message webdav-toggle-sync-sort                                                                 #menu: 导航 > WebDAV > 开/关 继承 WebDAV 目录排序
 #                script-message webdav-toggle-video-only                                                                #menu: 导航 > WebDAV > 开/关 仅播放视频
 
-推荐写入 uosc控件 'command:cloud:script-message open-webdav?WebDAV' 于 uosc.conf
+推荐写入 uosc 控件 'command:cloud:script-message open-webdav?WebDAV' 于 uosc.conf
 ]]
 
 local utils = require 'mp.utils'
@@ -35,7 +36,7 @@ local video_exts = {
 }
 
 local sub_exts = {
-    srt = true, ass = true, ssa = true, vtt = true,
+    srt = true, ass = true, ssa = true, vtt = true, txt = true,
     sup = true, sub = true, idx = true, smi = true, lrc = true
 }
 
@@ -128,7 +129,7 @@ local function parse_lastmod(s)
     local day, mon, year, h, m = s:match("(%d+)%s+(%a+)%s+(%d+)%s+(%d+):(%d+):")
     if not day then return 0 end
     return (tonumber(year) or 0) * 100000000
-         + (month_map[mon] or 0) * 1000000
+         + (month_map[mon] 或 0) * 1000000
          + tonumber(day) * 10000
          + tonumber(h) * 100
          + tonumber(m)
@@ -307,20 +308,6 @@ local function render_menu()
 			title = "📶 切换排序",
 			items = {
 				{
-					title  = sort_labels["time_desc"],
-					hint   = get_sort_mode() == "time_desc" and "☑️" or "⬜",
-					value  = "script-message webdav-set-sort time_desc",
-					active = get_sort_mode() == "time_desc" and 1 or nil,
-					keep_open = false,
-				},
-				{
-					title  = sort_labels["time_asc"],
-					hint   = get_sort_mode() == "time_asc" and "☑️" or "⬜",
-					value  = "script-message webdav-set-sort time_asc",
-					active = get_sort_mode() == "time_asc" and 1 or nil,
-					keep_open = false,
-				},
-				{
 					title  = sort_labels["name_asc"],
 					hint   = get_sort_mode() == "name_asc" and "☑️" or "⬜",
 					value  = "script-message webdav-set-sort name_asc",
@@ -332,6 +319,20 @@ local function render_menu()
 					hint   = get_sort_mode() == "name_desc" and "☑️" or "⬜",
 					value  = "script-message webdav-set-sort name_desc",
 					active = get_sort_mode() == "name_desc" and 1 or nil,
+					keep_open = false,
+				},
+				{
+					title  = sort_labels["time_desc"],
+					hint   = get_sort_mode() == "time_desc" and "☑️" or "⬜",
+					value  = "script-message webdav-set-sort time_desc",
+					active = get_sort_mode() == "time_desc" and 1 or nil,
+					keep_open = false,
+				},
+				{
+					title  = sort_labels["time_asc"],
+					hint   = get_sort_mode() == "time_asc" and "☑️" or "⬜",
+					value  = "script-message webdav-set-sort time_asc",
+					active = get_sort_mode() == "time_asc" and 1 or nil,
 					keep_open = false,
 				},
 			},
@@ -405,7 +406,7 @@ local function render_menu()
 
     local menu = {
         type            = "webdav_browser",
-        title           = (is_delete_mode and "【批量删除】 " or "WebDAV: ") .. current_path_decoded,
+        title           = (is_delete_mode and "【批量删除】" or "WebDAV:") .. current_path_decoded,
         items           = items,
         selected_index  = selected_index,  -- [CHANGE]
         search_style    = "on_demand",
@@ -436,7 +437,7 @@ local function render_menu()
     local menu_json = utils.format_json(menu)
 
     if menu_is_open then
-        mp.commandv("script-message-to", "uosc", "update-menu", menu_json)
+        mp.commandv("script-message-to"， "uosc", "update-menu", menu_json)
     else
         mp.commandv("script-message-to", "uosc", "open-menu", menu_json)
         menu_is_open = true
