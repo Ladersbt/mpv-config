@@ -32,12 +32,18 @@ options.read_options(opts, "uosc_webdav")
 local video_exts = {
     mp4 = true, mkv = true, avi = true, mov = true, wmv = true,
     flv = true, webm = true, m2ts = true, ts = true, rmvb = true,
-    m4v = true, iso = true, vob = true
+    m4v = true, iso = true, vob = true,
+}
+
+local audio_exts = {
+    mp3 = true, flac = true, aac = true, ogg = true, opus = true,
+    wav = true, m4a = true, ape = true, wma = true, alac = true,
+    mka = true, dts = true, ac3 = true,
 }
 
 local sub_exts = {
     srt = true, ass = true, ssa = true, vtt = true, txt = true,
-    sup = true, sub = true, idx = true, smi = true, lrc = true
+    sup = true, sub = true, idx = true, smi = true, lrc = true,
 }
 
 -- ============================================
@@ -69,8 +75,8 @@ end
 
 -- 状态管理变量
 local is_delete_mode = false
-local selected_files = {}        -- key = file_url，value = true
-local selected_dirs  = {}        -- key = dir_url，value = true
+local selected_files = {}
+local selected_dirs  = {}
 local cached_dir_items = {}
 local current_loaded_url = ""
 local sync_playlist_sort = false
@@ -418,10 +424,13 @@ local function render_menu()
     else
         -- [CHANGE] footnote 分类显示，0项不显示，全空则提示空目录
 		local dir_count   = 0
+		local audio_count = 0
 		local other_count = 0
 		for _, item in ipairs(cached_dir_items) do
 			if item.is_dir then
 				dir_count = dir_count + 1
+			elseif item.is_audio then
+				audio_count = audio_count + 1
 			elseif not item.is_video then
 				other_count = other_count + 1
 			end
@@ -429,6 +438,7 @@ local function render_menu()
 		local parts = {}
 		if dir_count   > 0 then table.insert(parts, string.format("📁 %d 个文件夹", dir_count))  end
 		if video_count > 0 then table.insert(parts, string.format("🎬 %d 个视频",   video_count)) end
+		if audio_count > 0 then table.insert(parts, string.format("🎵 %d 个音频",    audio_count)) end
 		if other_count > 0 then table.insert(parts, string.format("📄 %d 个其他文件",   other_count)) end
 		menu.footnote = #parts > 0 and table.concat(parts, "　") or "📂 空目录"
     end
@@ -586,8 +596,9 @@ local function open_webdav_url(target_url, force_refresh)
                 local ext        = name:match("%.([^%.]+)$")
                 local ext_lower   = ext and ext:lower()
                 local is_video    = ext_lower and video_exts[ext_lower]
+                local is_audio    = ext_lower and audio_exts[ext_lower]
                 local is_sub      = ext_lower and sub_exts[ext_lower]
-                local icon        = is_video and "🎬" or "📄"
+                local icon        = is_video and "🎬" or (is_audio and "🎵" or "📄")
 
                 table.insert(new_items, {
                     is_dir   = false,
@@ -597,6 +608,7 @@ local function open_webdav_url(target_url, force_refresh)
                     lastmod  = lastmod_str,
                     size     = size_str,
                     is_video = is_video,
+                    is_audio = is_audio,
                     is_sub   = is_sub,
                     icon     = icon
                 })
@@ -902,7 +914,7 @@ end)
 mp.register_script_message("webdav-toggle-sync-sort", function()
     sync_playlist_sort = not sync_playlist_sort
     local state = sync_playlist_sort
-        and ("开 (继承 WebDAV 目录排序: " .. sort_labels[get_sort_mode()] .. ")") or "关 (名称 A→Z)"  -- [CHANGE]
+        and ("开 (继承 WebDAV 目录排序: " .. sort_labels[get_sort_mode()] .. ")") or "关 (名称 A→Z)"
     mp.osd_message("🎬 播放列表排序继承: " .. state, 2)
 end)
 

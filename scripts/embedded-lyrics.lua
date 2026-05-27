@@ -1,13 +1,14 @@
--- embedded-lyrics.lua
--- 自动提取音乐文件内嵌歌词并作为字幕加载的 mpv 脚本
--- 支持：MP3 / FLAC / OGG / M4A 等内嵌 LRC 歌词
--- 双语歌词（中日/中英/中韩）自动检测语言顺序，始终保持中文在上
--- 依赖：系统需安装 ffmpeg 且在 PATH 中
--- 安装：%APPDATA%\mpv\scripts\（Windows）或 ~/.config/mpv/scripts/（Linux/Mac）
---
--- input.conf 绑定示例：
---   F8  script-message embedded-lyrics-toggle
---   F9  script-message embedded-lyrics-save
+--[[embedded-lyrics.lua
+自动提取音乐文件中的内嵌歌词并以字幕形式加载
+支持：MP3 / FLAC / OGG / M4A 等内嵌 LRC 歌词
+双语歌词（中日/中英/中韩）自动检测语言顺序，始终保持中文在上
+依赖：系统需安装 ffmpeg 且在 PATH 中
+安装：%APPDATA%\mpv\scripts\（Windows）或 ~/.config/mpv/scripts/（Linux/Mac）
+
+input.conf 绑定示例：
+  F8  script-message embedded-lyrics-toggle
+  F9  script-message embedded-lyrics-save
+]]
 
 local mp = require("mp")
 local options = require 'mp.options'
