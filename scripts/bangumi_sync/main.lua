@@ -1,0 +1,965 @@
+-- mpv_bangumi_sync v1.0.0
+local config = require "src.config"
+local sync_context = require "src.services.sync_context"
+local bangumi_service = require "src.services.bangumi_service"
+local dandanplay_service = require "src.services.dandanplay_service"
+local bangumi_api = require "src.bangumi_api"
+local db = require "src.db"
+local utils = require "src.utils"
+local mp_utils = require "mp.utils"
+local episode_status = require "src.services.episode_status"
+local title_guess = require "src.title_guess"
+local input = require "mp.input"
+local ui_menu = require "src.ui_menu"
+
+-- global variables
+AnimeInfo = nil
+CurrentEpisodeInfo = nil
+EpisodeStatusText = "未获取"
+EpisodeProgressText = "未获取"
+UpdateEpisodeTimer = nil
+EpisodesReady = false
+MatchResults = nil
+UoscAvailable = false
+SyncMode = "new"
+AutoMarkEnabled = Options.enable_auto_mark ~= false
+AutoMarkText = AutoMarkEnabled and "开启" or "禁用"
+CurrentEpisodeWatched = false
+local flush_pending_updates
+local compose_sync_message
+local update_episode_status_from_cache
+local reconcile_update_timer
+
+local function prune_db_on_start()
+  local removed = db.prune({max_age_days = 30, remove_missing = false})
+  if removed and removed > 0 then
+    mp.msg.verbose("Pruned db records: " .. tostring(removed))
+  end
+end
+
+prune_db_on_start()
+
+mp.register_script_message("uosc-version", function()
+  UoscAvailable = true
+end)
+
+-- UI/menu helpers moved to src/ui_menu.lua (ui_menu)
+
+local function reset_globals()
+  AnimeInfo = nil
+  CurrentEpisodeInfo = nil
+  EpisodeStatusText = "未获取"
+  EpisodeProgressText = "未获取"
+  CurrentEpisodeWatched = false
+  SyncMode = "new"
+  if UpdateEpisodeTimer then
+    UpdateEpisodeTimer:kill()
+    UpdateEpisodeTimer = nil
+  end
+  EpisodesReady = false
+  MatchResults = nil
+end
+
+local function resolve_auto_mark_enabled()
+  return Options.enable_auto_mark ~= false
+end
+
+local function update_auto_mark_text()
+  AutoMarkText = AutoMarkEnabled and "开启" or "禁用"
+end
+
+local function log_auto_mark_mode()
+  if AutoMarkEnabled then
+    mp.msg.info("自动点格子：开启")
+  else
+    mp.msg.info("自动点格子：禁用（仅展示，不同步）")
+  end
+end
+
+local function stop_update_timer(reason)
+  if UpdateEpisodeTimer then
+    UpdateEpisodeTimer:kill()
+    UpdateEpisodeTimer = nil
+    if reason and reason ~= "" then
+      mp.msg.verbose("停止进度检测定时器: " .. reason)
+    end
+  end
+end
+
+local function should_start_update_timer()
+  return AutoMarkEnabled
+    and EpisodesReady
+    and not CurrentEpisodeWatched
+    and AnimeInfo ~= nil
+end
+
+local function start_update_timer_if_needed()
+  if UpdateEpisodeTimer then
+    return
+  end
+  if not should_start_update_timer() then
+    return
+  end
+
+  UpdateEpisodeTimer = mp.add_periodic_timer(5, function()
+    if not AutoMarkEnabled then
+      stop_update_timer("自动点格子已禁用")
+      return
+    end
+    if CurrentEpisodeWatched then
+      stop_update_timer("当前集已看过")
+      return
+    end
+    if not EpisodesReady then
+      mp.msg.verbose("Bangumi 剧集未更新或更新失败，跳过更新")
+      return
+    end
+
+    local current_time = mp.get_property_number("time-pos")
+    local total_time = mp.get_property_number("duration")
+    if not current_time or not total_time then
+      return
+    end
+    local ratio = current_time / total_time
+    local threshold = Options.progress_mark_threshold or 0.9
+    if ratio < threshold then
+      return
+    end
+
+    stop_update_timer("到达进度阈值，开始同步")
+    bangumi_service.update_episode({defer = (SyncMode == "old"), anime_info = AnimeInfo}).async {
+      resp = function(data)
+        data = data or {}
+        local updated = update_episode_status_from_cache(data and data.episodes_data or nil)
+        if updated then
+          EpisodesReady = true
+        end
+        local collection_update_message = data.collection_update_message
+        if data.deferred then
+          local message = compose_sync_message(collection_update_message, "补番：已加入待批量同步列表")
+          mp.msg.info(message:gsub("\n", " | "))
+          mp.osd_message(message, 3)
+        elseif data.disabled then
+          mp.msg.verbose("自动点格子已禁用，跳过同步")
+        elseif data.skipped then
+          local message = compose_sync_message(collection_update_message, "同步Bangumi追番记录进度成功（无需更新）")
+          mp.msg.info(message:gsub("\n", " | "))
+          mp.osd_message(message)
+        else
+          local message = compose_sync_message(collection_update_message, "同步Bangumi追番记录进度成功")
+          mp.msg.info(message:gsub("\n", " | "))
+          mp.osd_message(message)
+          EpisodeStatusText = "已看"
+          CurrentEpisodeWatched = true
+        end
+        reconcile_update_timer()
+      end,
+      err = function(err)
+        mp.msg.error("更新当前集信息失败:", err)
+        mp.osd_message("同步Bangumi追番记录进度失败", 3)
+      end,
+    }
+  end)
+end
+
+reconcile_update_timer = function()
+  if should_start_update_timer() then
+    start_update_timer_if_needed()
+    return
+  end
+  stop_update_timer("当前模式无需进度检测")
+end
+
+local function get_current_file_path()
+  local file_path = mp.get_property("path")
+  if not file_path or file_path == "" then
+    return nil
+  end
+  return mp.command_native({"normalize-path", file_path})
+end
+
+local function resolve_runtime_episode_id(bgm_id)
+  if not bgm_id then
+    return nil
+  end
+  local file_path = get_current_file_path()
+  if not file_path then
+    return nil
+  end
+  local filename = file_path:match("([^/\\]+)$") or file_path
+  local parsed = utils.extract_info_from_filename(filename)
+  if not parsed or type(parsed.episode) ~= "number" then
+    return nil
+  end
+  return tonumber(bgm_id) * 10000 + parsed.episode
+end
+
+compose_sync_message = function(collection_update_message, sync_message)
+  if collection_update_message and collection_update_message ~= "" then
+    return collection_update_message .. "\n" .. sync_message
+  end
+  return sync_message
+end
+
+local function log_context_loaded_summary()
+  local info = CurrentEpisodeInfo or {}
+  local anime_title = info.animeTitle or "未知番剧"
+  local episode_title = info.episodeTitle or "未知单集"
+  local episode_ep = tonumber(info.episodeEp)
+  local episode_part = episode_ep and ("第" .. tostring(episode_ep) .. "话 ") or ""
+
+  local result_text = EpisodesReady and "番剧信息加载成功" or "番剧信息加载完成（剧集状态未就绪）"
+  mp.msg.info(
+    string.format(
+      "%s-%s%s %s",
+      anime_title,
+      episode_part,
+      episode_title,
+      result_text
+    )
+  )
+end
+
+update_episode_status_from_cache = function(episodes_data)
+  local result = episode_status.compute(CurrentEpisodeInfo, episodes_data)
+  if not result then
+    CurrentEpisodeWatched = false
+    return false
+  end
+
+  local progress = result.progress or {}
+  EpisodeProgressText = string.format("%d / %d", progress.watched or 0, progress.total or 0)
+  EpisodeStatusText = episode_status.map_status(result.status_value)
+  CurrentEpisodeWatched = tonumber(result.status_value) == 2
+  if result.episode_info then
+    CurrentEpisodeInfo = result.episode_info
+  end
+  return true
+end
+
+local function init(episode_id, opts)
+  local force_refresh = opts == true or (type(opts) == "table" and opts.force_refresh)
+  reset_globals()
+  local source = (type(opts) == "table" and opts.source) or (episode_id and "manual" or "auto")
+  sync_context.sync_context({
+    episode_id = episode_id,
+    manual_bgm_id = type(opts) == "table" and opts.manual_bgm_id or nil,
+    force_refresh = force_refresh,
+    source = source,
+  }).async {
+    resp = function(result)
+      if result and result.status == "select" and result.matches and #result.matches > 1 then
+        mp.msg.info "匹配结果不唯一，请手动选择"
+        mp.osd_message("匹配结果不唯一，请手动选择", 3)
+        MatchResults = result.matches
+        return
+      end
+
+      if not result or result.status ~= "ok" or not result.context then
+        mp.msg.error "获取番剧元信息失败"
+        return
+      end
+
+      CurrentEpisodeInfo = result.context.episode_info
+      local anime_info = result.context.anime_info or {}
+      anime_info.bgm_id = result.context.bgm_id
+      anime_info.bgm_url = result.context.bgm_url
+      AnimeInfo = anime_info
+      SyncMode = result.context.sync_mode or "new"
+      EpisodesReady = update_episode_status_from_cache(result.context.episodes)
+
+      mp.msg.verbose(
+        "Bangumi ID:",
+        AnimeInfo.bgm_id,
+        "Bangumi Url:",
+        AnimeInfo.bgm_url
+      )
+      log_context_loaded_summary()
+        reconcile_update_timer()
+      end,
+    err = function(err)
+      if err and err.error == "VideoPathError" then
+    if err.reason == "NotInStorage" then
+      mp.msg.verbose("视频不在配置的存储路径内，跳过初始化")
+      return
+        end
+        if err.reason == "InvalidPath" then
+          mp.msg.error("视频路径无效")
+          return
+        end
+      end
+      if err and err.error == "EpisodeNumberNotFound" then
+        mp.msg.error("无法从文件名解析集数，请检查命名")
+        mp.osd_message("无法从文件名解析集数，请检查命名", 3)
+        return
+      end
+      mp.msg.error("获取番剧元信息失败")
+    end,
+  }
+end
+
+local function bind_manual_bgm_and_reload(bgm_id)
+  local file_path = get_current_file_path()
+  if not file_path then
+    return false, "PathUnavailable"
+  end
+
+  local ok = db.set_manual_bgm_id(file_path, bgm_id)
+  if not ok then
+    return false, "SaveFailed"
+  end
+
+  init(nil, { force_refresh = true, source = "manual_bgm", manual_bgm_id = bgm_id })
+  return true, nil
+end
+
+flush_pending_updates = function(reason, opts)
+  local results = bangumi_service.flush_pending(opts)
+  if results and #results > 0 then
+    mp.msg.info(string.format("Batch synced episodes: %d", #results))
+  end
+end
+
+local function update_info_menu_view()
+  ui_menu.update_info_menu({
+    UoscAvailable = UoscAvailable,
+    CurrentEpisodeInfo = CurrentEpisodeInfo,
+    EpisodeStatusText = EpisodeStatusText,
+    EpisodeProgressText = EpisodeProgressText,
+    AutoMarkText = AutoMarkText,
+  })
+end
+
+local function apply_auto_mark_mode(opts)
+  opts = opts or {}
+  local previous = AutoMarkEnabled
+  AutoMarkEnabled = resolve_auto_mark_enabled()
+  update_auto_mark_text()
+
+  if opts.force_log or previous == nil or previous ~= AutoMarkEnabled then
+    log_auto_mark_mode()
+  end
+
+  if previous == true and AutoMarkEnabled == false then
+    flush_pending_updates("auto-mark-disabled", {force = true, detach = false})
+    stop_update_timer("自动点格子已禁用")
+  elseif previous == false and AutoMarkEnabled == true then
+    reconcile_update_timer()
+  elseif not AutoMarkEnabled then
+    stop_update_timer("自动点格子已禁用")
+  end
+
+  update_info_menu_view()
+end
+
+local function toggle_auto_mark_from_panel()
+  Options.enable_auto_mark = not AutoMarkEnabled
+  apply_auto_mark_mode({force_log = true})
+  mp.osd_message("自动点格子：" .. AutoMarkText, 2)
+end
+
+config.on_options_changed(function()
+  apply_auto_mark_mode()
+end)
+apply_auto_mark_mode({force_log = true})
+
+mp.register_event("file-loaded", function()
+  if utils.is_protocol(mp.get_property "path") then
+    mp.msg.verbose("Skipping init for protocol:", mp.get_property "path")
+    return
+  end
+  init()
+end)
+
+
+mp.register_event("end-file", function(event)
+  if not event then
+    return
+  end
+  if event.reason == "quit" then
+    flush_pending_updates(event.reason, {detach = true})
+  end
+end)
+
+mp.register_event("shutdown", function()
+  flush_pending_updates("shutdown", {detach = true})
+end)
+
+-- key bindings
+
+local key_bindings = {
+  ["Alt+o"] = { "open-bangumi-info" },
+}
+
+for key, binding in pairs(key_bindings) do
+  table.insert(binding, 1, "script-message")
+  local desc = table.concat(binding, "", 2)
+  mp.msg.verbose("key:", key, "binding:", binding[2], "desc:", desc)
+  mp.add_key_binding(key, desc, function()
+    mp.command_native(binding)
+  end)
+end
+
+-- script messages
+
+mp.register_script_message("open-bangumi-url", function()
+  if not AnimeInfo or not AnimeInfo.bgm_url then
+    mp.msg.error "未匹配到番剧信息"
+    return
+  end
+  bangumi_service.open_url(AnimeInfo.bgm_url).execute()
+end)
+
+mp.register_script_message("open-bangumi-info", function()
+  ui_menu.open_info_menu({
+    UoscAvailable = UoscAvailable,
+    CurrentEpisodeInfo = CurrentEpisodeInfo,
+    EpisodeStatusText = EpisodeStatusText,
+    EpisodeProgressText = EpisodeProgressText,
+    AutoMarkText = AutoMarkText,
+  })
+end)
+
+mp.register_script_message("bgm-toggle-auto-mark", function()
+  toggle_auto_mark_from_panel()
+end)
+
+mp.register_script_message("bgm-noop", function() end)
+
+mp.register_script_message("bgm-info-menu-event", function(payload)
+  local event = mp_utils.parse_json(payload or "")
+  if not event or event.type ~= "activate" then
+    return
+  end
+
+  if event.action == "refresh" then
+    local file_path = get_current_file_path()
+    if not file_path then
+      mp.osd_message("无法获取当前文件路径", 2)
+      return
+    end
+    local db_record = db.get({ path = file_path })
+    if not db_record or not db_record.bgm_id then
+      mp.osd_message("缺少缓存条目信息，无法刷新", 2)
+      return
+    end
+    local runtime_episode_id = nil
+    if db_record.manual and db_record.bgm_id then
+      runtime_episode_id = resolve_runtime_episode_id(db_record.bgm_id)
+    else
+      runtime_episode_id = db_record.dandanplay_id or resolve_runtime_episode_id(db_record.bgm_id)
+    end
+    if not runtime_episode_id then
+      mp.osd_message("无法定位当前集，刷新失败", 2)
+      return
+    end
+    local episodes = sync_context.get_user_episodes_cached(
+      runtime_episode_id,
+      db_record.bgm_id,
+      { force_refresh = true }
+    )
+    if not episodes then
+      mp.osd_message("刷新剧集信息失败", 2)
+      return
+    end
+    local updated = update_episode_status_from_cache(episodes)
+    if updated then
+      EpisodesReady = true
+    end
+    reconcile_update_timer()
+    update_info_menu_view()
+    mp.osd_message("已刷新", 2)
+    return
+  end
+  if event.action then
+    return
+  end
+
+  local modifiers = event.modifiers
+  if modifiers and modifiers ~= "alt" then
+    return
+  end
+
+  local value = event.value
+  if value == nil then
+    return
+  end
+
+  if type(value) == "table" then
+    mp.commandv(unpack(value))
+  else
+    mp.command(tostring(value))
+  end
+
+  if not event.keep_open and not modifiers then
+    mp.commandv("script-message-to", "uosc", "close-menu", "menu_bgm_info")
+  end
+end)
+
+mp.register_script_message("bgm-open-search-from-info", function()
+  mp.commandv("script-message-to", "uosc", "close-menu", "menu_bgm_info")
+  mp.commandv("script-message", "manual-match")
+end)
+
+mp.register_script_message("bgm-open-search-source", function()
+  MatchResults = nil
+  mp.commandv("script-message-to", "uosc", "close-menu", "menu_bgm_match")
+  ui_menu.open_manual_match_source_menu()
+end)
+
+mp.register_script_message("bgm-open-search", function()
+  mp.commandv("script-message", "bgm-open-dandan-search")
+end)
+
+mp.register_script_message("bgm-open-dandan-search", function()
+  MatchResults = nil
+  mp.commandv("script-message-to", "uosc", "close-menu", "menu_bgm_manual_source")
+  mp.commandv("script-message-to", "uosc", "close-menu", "menu_bgm_match")
+  ui_menu.open_anime_search_menu(title_guess.get_default_search_query())
+end)
+
+mp.register_script_message("bgm-open-bgm-subject-search", function()
+  MatchResults = nil
+  mp.commandv("script-message-to", "uosc", "close-menu", "menu_bgm_manual_source")
+  mp.commandv("script-message-to", "uosc", "close-menu", "menu_bgm_match")
+  ui_menu.open_subject_search_menu(title_guess.get_default_search_query())
+end)
+
+mp.register_script_message("bgm-search-anime", function(query)
+  if not query or query == "" then
+    ui_menu.update_uosc_menu({
+      type = "menu_bgm_anime",
+      title = "输入番剧名称",
+      search_style = "palette",
+      search_debounce = "submit",
+      search_suggestion = "",
+      on_search = { "script-message-to", mp.get_script_name(), "bgm-search-anime" },
+      footnote = "使用 enter 或 ctrl+enter 进行搜索",
+      items = { ui_menu.format_menu_item("请输入番剧名称") },
+    })
+    return
+  end
+
+  ui_menu.update_uosc_menu({
+    type = "menu_bgm_anime",
+    title = "输入番剧名称",
+    search_style = "palette",
+    search_debounce = "submit",
+    search_suggestion = query,
+    on_search = { "script-message-to", mp.get_script_name(), "bgm-search-anime" },
+    footnote = "正在加载搜索结果...",
+    items = { ui_menu.format_menu_item("加载中...") },
+  })
+
+  dandanplay_service.dandanplay_search(query).async {
+    resp = function(data)
+      local items = {}
+      for i, item in ipairs(data or {}) do
+        items[i] = {
+          title = item.title,
+          hint = item.type,
+          value = { "script-message-to", mp.get_script_name(), "bgm-search-episodes", item.title, item.id },
+          keep_open = false,
+          selectable = true,
+        }
+      end
+      if #items == 0 then
+        items = { ui_menu.format_menu_item("无搜索结果") }
+      end
+      ui_menu.update_uosc_menu({
+        type = "menu_bgm_anime",
+        title = "输入番剧名称",
+        search_style = "palette",
+        search_debounce = "submit",
+        search_suggestion = query,
+        on_search = { "script-message-to", mp.get_script_name(), "bgm-search-anime" },
+        footnote = "使用 enter 或 ctrl+enter 进行搜索",
+        items = items,
+      })
+    end,
+    err = function(err)
+      mp.msg.error("搜索番剧失败:", err)
+      ui_menu.update_uosc_menu({
+        type = "menu_bgm_anime",
+        title = "输入番剧名称",
+        search_style = "palette",
+        search_debounce = "submit",
+        search_suggestion = query,
+        on_search = { "script-message-to", mp.get_script_name(), "bgm-search-anime" },
+        footnote = "搜索失败，请重试",
+        items = { ui_menu.format_menu_item("搜索番剧失败") },
+      })
+    end,
+  }
+end)
+
+mp.register_script_message("bgm-search-subjects", function(query)
+  if not query or query == "" then
+    ui_menu.update_uosc_menu({
+      type = "menu_bgm_subject",
+      title = "搜索Bangumi条目",
+      search_style = "palette",
+      search_debounce = "submit",
+      search_suggestion = "",
+      on_search = { "script-message-to", mp.get_script_name(), "bgm-search-subjects" },
+      footnote = "使用 enter 或 ctrl+enter 进行搜索",
+      items = { ui_menu.format_menu_item("请输入关键词") },
+    })
+    return
+  end
+
+  ui_menu.update_uosc_menu({
+    type = "menu_bgm_subject",
+    title = "搜索Bangumi条目",
+    search_style = "palette",
+    search_debounce = "submit",
+    search_suggestion = query,
+    on_search = { "script-message-to", mp.get_script_name(), "bgm-search-subjects" },
+    footnote = "正在加载搜索结果...",
+    items = { ui_menu.format_menu_item("加载中...") },
+  })
+
+  local res = bangumi_api.search_subjects(query, { limit = 20, type_filter = { 2 } })
+  if not res or tonumber(res.status_code or 0) >= 400 or not res.body then
+    ui_menu.update_uosc_menu({
+      type = "menu_bgm_subject",
+      title = "搜索Bangumi条目",
+      search_style = "palette",
+      search_debounce = "submit",
+      search_suggestion = query,
+      on_search = { "script-message-to", mp.get_script_name(), "bgm-search-subjects" },
+      footnote = "搜索失败，请重试",
+      items = { ui_menu.format_menu_item("搜索Bangumi条目失败") },
+    })
+    return
+  end
+
+  local items = {}
+  for i, item in ipairs(res.body.data or {}) do
+    local title = item.name_cn or item.name or ("#" .. tostring(item.id))
+    items[i] = {
+      title = title,
+      hint = "#" .. tostring(item.id),
+      value = { "script-message-to", mp.get_script_name(), "bgm-select-subject", tostring(item.id) },
+      keep_open = false,
+      selectable = true,
+    }
+  end
+  if #items == 0 then
+    items = { ui_menu.format_menu_item("无搜索结果") }
+  end
+
+  ui_menu.update_uosc_menu({
+    type = "menu_bgm_subject",
+    title = "搜索Bangumi条目",
+    search_style = "palette",
+    search_debounce = "submit",
+    search_suggestion = query,
+    on_search = { "script-message-to", mp.get_script_name(), "bgm-search-subjects" },
+    footnote = "选择条目后会绑定当前目录",
+    items = items,
+  })
+end)
+
+mp.register_script_message("bgm-select-subject", function(subject_id)
+  local bgm_id = tonumber(subject_id)
+  if not bgm_id then
+    mp.msg.error("无效的Bangumi条目ID")
+    return
+  end
+
+  mp.commandv("script-message-to", "uosc", "close-menu", "menu_bgm_subject")
+  local ok, err_code = bind_manual_bgm_and_reload(bgm_id)
+  if not ok then
+    if err_code == "PathUnavailable" then
+      mp.osd_message("无法获取当前文件路径", 2)
+      return
+    end
+    mp.osd_message("保存Bangumi目录绑定失败", 2)
+    return
+  end
+  mp.osd_message("已绑定当前目录Bangumi条目", 2)
+end)
+
+mp.register_script_message("bgm-search-episodes", function(anime_title, anime_id)
+  if not anime_id then
+    mp.msg.error "无效的番剧ID"
+    return
+  end
+  mp.commandv("script-message-to", "uosc", "close-menu", "menu_bgm_anime")
+
+  ui_menu.open_uosc_menu({
+    type = "menu_bgm_episodes",
+    title = string.format("选择剧集: %s", anime_title),
+    search_style = "on_demand",
+    footnote = "正在加载剧集...",
+    items = { ui_menu.format_menu_item("加载中...") },
+  })
+
+  dandanplay_service.get_dandanplay_episodes(anime_id).async {
+    resp = function(data)
+      local items = {}
+      for i, item in ipairs(data or {}) do
+        items[i] = {
+          title = item.title,
+          hint = tostring(i),
+          value = { "script-message-to", mp.get_script_name(), "bgm-select-episode", item.id },
+          keep_open = false,
+          selectable = true,
+        }
+      end
+      if #items == 0 then
+        items = { ui_menu.format_menu_item("没有找到匹配的剧集") }
+      end
+      ui_menu.update_uosc_menu({
+        type = "menu_bgm_episodes",
+        title = string.format("选择剧集: %s", anime_title),
+        search_style = "on_demand",
+        footnote = "使用 / 打开筛选",
+        items = items,
+      })
+    end,
+    err = function(err)
+      mp.msg.error("获取剧集信息失败:", err)
+      ui_menu.update_uosc_menu({
+        type = "menu_bgm_episodes",
+        title = string.format("选择剧集: %s", anime_title),
+        search_style = "on_demand",
+        footnote = "获取失败，请重试",
+        items = { ui_menu.format_menu_item("获取剧集信息失败") },
+      })
+    end,
+  }
+end)
+
+mp.register_script_message("bgm-select-episode", function(episode_id)
+  if not episode_id then
+    mp.msg.error "无效的集数ID"
+    return
+  end
+  mp.commandv("script-message-to", "uosc", "close-menu", "menu_bgm_episodes")
+  init(episode_id, { force_refresh = true })
+end)
+
+mp.register_script_message("bgm-select-match", function(episode_id)
+  if not episode_id then
+    mp.msg.error "无效的集数ID"
+    return
+  end
+  mp.commandv("script-message-to", "uosc", "close-menu", "menu_bgm_match")
+  init(episode_id, { force_refresh = true })
+end)
+
+mp.register_script_message("manual-match", function()
+  if UoscAvailable then
+    if MatchResults then
+      ui_menu.open_match_menu(MatchResults)
+      return
+    end
+    ui_menu.open_manual_match_source_menu()
+    return
+  end
+  local bind_manual_subject = function(bgm_id)
+    local ok, err_code = bind_manual_bgm_and_reload(bgm_id)
+    if not ok then
+      if err_code == "PathUnavailable" then
+        mp.msg.error("无法获取当前文件路径")
+        mp.osd_message("无法获取当前文件路径", 3)
+        return
+      end
+      mp.msg.error("保存Bangumi目录绑定失败")
+      mp.osd_message("保存Bangumi目录绑定失败", 3)
+      return
+    end
+  end
+  local select_episode = function(anime_id)
+    if not anime_id then
+      mp.msg.error "无效的番剧ID"
+      return
+    end
+    dandanplay_service.get_dandanplay_episodes(anime_id).async {
+      resp = function(data)
+        if not data or #data == 0 then
+          mp.msg.error "没有找到匹配的剧集"
+          mp.osd_message("没有找到匹配的剧集", 3)
+          return
+        end
+        local episode_items = {}
+        for i, item in ipairs(data) do
+          episode_items[i] = item.title
+        end
+        input.select {
+          prompt = "请选择正确剧集：",
+          items = episode_items,
+          submit = function(idx)
+            if idx < 1 or idx > #data then
+              mp.msg.error "无效的选择"
+              return
+            end
+            local selected_episode = data[idx]
+            mp.msg.verbose(
+              "选择的剧集",
+              selected_episode.id,
+              selected_episode.title
+            )
+            init(selected_episode.id, { force_refresh = true })
+          end,
+        }
+      end,
+      err = function(err)
+        mp.msg.error("获取剧集信息失败:", err)
+        mp.osd_message("获取剧集信息失败", 3)
+      end,
+    }
+  end
+  local select_anime = function(data)
+    if not data or #data == 0 then
+      mp.msg.error "没有找到匹配的番剧"
+      mp.osd_message("没有找到匹配的番剧", 3)
+      return
+    end
+    local anime_items = {}
+    for i, item in ipairs(data) do
+      anime_items[i] = string.format("%d. %s\t[%s]", i, item.title, item.type)
+    end
+    input.terminate()
+    input.select {
+      prompt = "请选择正确番剧：",
+      items = anime_items,
+      submit = function(idx)
+        if idx < 1 or idx > #data then
+          mp.msg.error "无效的选择"
+          return
+        end
+        local selected_anime = data[idx]
+        mp.msg.verbose("选择的番剧", selected_anime.title)
+        select_episode(selected_anime.id)
+      end,
+    }
+  end
+  local select_bgm_subject = function(data)
+    if not data or #data == 0 then
+      mp.msg.error "没有找到Bangumi条目"
+      mp.osd_message("没有找到Bangumi条目", 3)
+      return
+    end
+    local items = {}
+    for i, item in ipairs(data) do
+      local title = item.name_cn or item.name or ("#" .. tostring(item.id))
+      items[i] = string.format("%d. %s\t[#%s]", i, title, tostring(item.id))
+    end
+    input.terminate()
+    input.select {
+      prompt = "请选择Bangumi条目：",
+      items = items,
+      submit = function(idx)
+        if idx < 1 or idx > #data then
+          mp.msg.error "无效的选择"
+          return
+        end
+        local selected = data[idx]
+        bind_manual_subject(selected.id)
+      end,
+    }
+  end
+  local start_dandan_search = function()
+    input.terminate()
+    input.get {
+      prompt = "请输入番剧名：",
+      submit = function(text)
+        dandanplay_service.dandanplay_search(text).async {
+          resp = function(data)
+            select_anime(data)
+          end,
+          err = function(err)
+            mp.msg.error("搜索番剧失败:", err)
+            mp.osd_message("搜索番剧失败", 3)
+          end,
+        }
+      end,
+      closed = function()
+        mp.set_property("pause", "no")
+      end,
+    }
+  end
+  local start_bgm_search = function()
+    input.terminate()
+    input.get {
+      prompt = "请输入Bangumi关键词：",
+      submit = function(text)
+        local res = bangumi_api.search_subjects(text, { limit = 20, type_filter = { 2 } })
+        if not res or tonumber(res.status_code or 0) >= 400 or not res.body then
+          mp.msg.error("搜索Bangumi条目失败")
+          mp.osd_message("搜索Bangumi条目失败", 3)
+          return
+        end
+        select_bgm_subject(res.body.data or {})
+      end,
+      closed = function()
+        mp.set_property("pause", "no")
+      end,
+    }
+  end
+  local open_source_menu = function()
+    input.terminate()
+    input.select {
+      prompt = "请选择手动匹配来源：",
+      items = { "弹弹play搜索", "Bangumi搜索" },
+      submit = function(idx)
+        if idx == 1 then
+          start_dandan_search()
+          return
+        end
+        if idx == 2 then
+          start_bgm_search()
+          return
+        end
+        mp.msg.error "无效的选择"
+      end,
+      closed = function()
+        mp.set_property("pause", "no")
+      end,
+    }
+  end
+
+  mp.set_property("pause", "yes")
+  if not MatchResults then
+    open_source_menu()
+    return
+  end
+
+  local match_items = {}
+  for i, match in ipairs(MatchResults) do
+    match_items[i] =
+      string.format("%d. %s\t[%s]", i, match.animeTitle, match.episodeTitle)
+  end
+  match_items[#match_items + 1] = "没有结果，手动匹配"
+
+  input.select {
+    prompt = "请选择匹配结果：",
+    items = match_items,
+    submit = function(idx)
+      if idx < 1 or idx > #match_items then
+        mp.msg.error "无效的选择"
+        return
+      end
+      if idx == #match_items then
+        mp.msg.verbose "选择了手动匹配"
+        input.terminate()
+        MatchResults = nil
+        open_source_menu()
+        return
+      end
+      local selected_match = MatchResults[idx]
+      mp.msg.verbose(
+        "选择的匹配结果",
+        selected_match.animeTitle,
+        selected_match.episodeTitle
+      )
+      init(selected_match.episodeId, { force_refresh = true })
+    end,
+    closed = function()
+      mp.set_property("pause", "no")
+    end,
+  }
+end)

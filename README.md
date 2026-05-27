@@ -1,51 +1,101 @@
-## MPV config ([English branch](https://github.com/dyphire/mpv-config/tree/eng))
+基于上游优秀的`mpv`配置 [mpv-config](https://github.com/dyphire/mpv-config)，针对我个人需求做了部分修改以及补充一些脚本（部分来自其他仓库,部分基本完全借助`ai`编写 😂😂😂）
 
-### 项目介绍
+---
 
-本项目为 windows 下 [mpv](https://github.com/mpv-player/mpv) 播放器的配置文件，应放入`mpv.exe`所在目录的`portable_config`文件夹内，
+## 🚀 二次修改或者新增脚本说明
 
-或 mpv 配置默认路径`%APPDATA%/mpv/`下，这种方式全局生效。
+### `autocopyshot.lua`
+* **功能描述**：在触发`mpv`原生视频截图的同时复制到系统剪贴板
+* **`input.conf`写法示例**：
 
-使用`portable_config`时会覆盖全局配置方案。
+```ini
+Ctrl+c      script-message screenshot-subtitles-copy   #menu: 截取 > 截屏 > Autocopyshot > 同源尺寸 - 有字幕 - 无 OSD-单帧
 
-PS：自行编辑配置文件时，注意编码格式应为 UTF-8，换行符为 Unix，否则 MPV 可能无法识别
+Ctrl+alt+c  script-message screenshot-video-copy       #menu: 截取 > 截屏 > Autocopyshot > 同源尺寸 - 无字幕 - 无 OSD-单帧
 
-**mpv 整合包下载**：[Releases](https://github.com/dyphire/mpv-config/releases)
+Ctrl+shift+c script-message screenshot-window-copy     #menu: 截取 > 截屏 > Autocopyshot > 实际尺寸 - 有字幕 - 有 OSD-单帧
+```
 
-### mpv 客户端
+### `bangumi_sync`
+* **来源**：[x-Armin/mpv_bangumi_sync](https://github.com/x-Armin/mpv_bangumi_sync)
+* **功能描述**：基于`uosc`框架，同步和回传 Bangumi 观看记录
+* **`input.conf`写法示例**：参考原仓库说明
 
-- 目前 mpv 没有官方发布的客户端，官网上有放一些推荐的第三方编译版：[https://mpv.io/installation](https://mpv.io/installation)
-  - windows 上推荐使用 shinchiro 版： [shinchiro_mpv](https://github.com/shinchiro/mpv-winbuild-cmake/releases) ![releases](https://img.shields.io/github/v/release/shinchiro/mpv-winbuild-cmake)
-  - 每日构建版：[zhongfly_mpv](https://github.com/zhongfly/mpv-winbuild) [![releases](https://img.shields.io/github/v/release/zhongfly/mpv-winbuild)](https://github.com/zhongfly/mpv-winbuild/releases)
-  - 基于个人修改版 [mpv](https://github.com/dyphire/mpv/tree/patch) 构建版：[dyphire_mpv](https://github.com/dyphire/mpv-winbuild) [![releases](https://img.shields.io/github/v/release/dyphire/mpv-winbuild)](https://github.com/dyphire/mpv-winbuild/releases)
-    - [修改版 mpv 相关说明](https://github.com/dyphire/mpv-config/discussions/7)
-- 目前比较成熟的 mpv/libmpv 前端推荐： [mpv.net](https://github.com/mpvnet-player/mpv.net) [![mpv.net](https://flat.badgen.net/github/last-commit/mpvnet-player/mpv.net?scale=1.0&cache=1800)](https://github.com/mpvnet-player/mpv.net) [![releases](https://img.shields.io/github/v/release/mpvnet-player/mpv.net)](https://github.com/mpvnet-player/mpv.net/releases)
-  - 个人 mpv.net 配置文件参考：https://github.com/dyphire/mpv-config/tree/mpvnet
-- 浏览器调用 mpv 播放的方法推荐
-  - [mpv-handler](https://github.com/akiirui/mpv-handler) 配合脚本 [play-with-mpv](https://greasyfork.org/zh-CN/scripts/416271-play-with-mpv)
-  - [external-player](https://github.com/LuckyPuppy514/external-player)
-- 单实例模式：[umpv](https://github.com/zhongfly/umpv-go)
+### `clock.lua`
+* **功能描述**：实现时钟效果，显示当前系统时间、观看当前视频还需时间及视频结束时间
+* **`input.conf`写法示例**：
 
-### 脚本着色器说明
+```ini
+t                 script-message-to clock toggle                                                                       #menu: 其他 > 开启/关闭 时间显示
+```
 
-本项目使用的 mpv 脚本及功能介绍详见 wiki 内容： [脚本说明-wiki](https://github.com/dyphire/mpv-config/wiki/脚本说明)
+### `cut_sub.lua`
+* **功能描述**：裁剪与视频同目录下近似名称的字幕和弹幕文件
+* **`input.conf`写法示例**：
 
-本项目涉及的着色器见 mpv.conf 中相关内容
+```ini
+#                script-message cut_sub_ab                                                                              #menu: 截取 > 字幕&弹幕 > 标记 A/B 点
+#                script-message cut_sub_clear                                                                           #menu: 截取 > 字幕&弹幕 > 清除标记
+```
 
-### 预览
+### `dir_subs.lua`
+* **功能描述**：记录和恢复视频的字幕大小和位置状态，会影响同目录下所有视频的字幕状态
 
- ![image-20231103224421000](https://cdn.jsdelivr.net/gh/dyphire/PicGo/img/2023/11/03/image-20231103224421000.png)
+### `extract_fonts.lua`
+* **功能描述**：导出视频中的内封字体
+* **`input.conf`写法示例**：
 
-![image-20231103224540075](https://cdn.jsdelivr.net/gh/dyphire/PicGo/img/2023/11/03/image-20231103224540075.png)
+```ini
+Ctrl+S           script-binding extract-fonts                                                                           #menu: 截取 > 视频 > 提取MKV视频内封字体
+```
 
-![image-20231103224557019](https://cdn.jsdelivr.net/gh/dyphire/PicGo/img/2023/11/03/image-20231103224557019.png)
+### `skip_sponsorblock.lua`
+* **功能描述**：参考上游 [chapterskip.lua](https://github.com/dyphire/mpv-config/blob/master/scripts/chapterskip.lua) 与 [sponsorblock_minimal.lua](https://github.com/dyphire/mpv-config/blob/master/scripts/sponsorblock_minimal.lua)，实现流媒体播放时识别 B 站和 YouTube 的各种特殊片段，插入章节信息并提供交互按钮。可配合油猴脚本 [play-with-mpv](https://github.com/Ladersbt/userscript/tree/main/play-with-mpv)（参考修改自 [akiirui/userscript](https://github.com/akiirui/userscript/tree/main/play-with-mpv) 和 [LuckyPuppy514/external-player](https://github.com/LuckyPuppy514/external-player)）使用，在上游基础上增加了若干功能并调整了 UI
 
-| 拼音搜索（支持首字母）                                                                                    | 字幕下载                                                                                           |
-| ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| ![image](https://cdn.jsdelivr.net/gh/dyphire/PicGo/img/2023/11/03/image-20231103224614449.png) | ![image](https://cdn.jsdelivr.net/gh/dyphire/PicGo/img/2023/11/03/image-20231103224721066.png) |
+### `speed_manager.lua`
+* **功能描述**：记录和恢复播放速度，支持回档至上次速度
+* **`input.conf`写法示例**：
 
-### 参考
+```ini
+KP1              script-message toggle_speed; script-message-to uosc flash-speed                                        #menu: 播放 > 速度调整 > 速度 重置/恢复
+```
 
-* [hooke007 配置手册](https://hooke007.github.io/mpv-lazy/mpv.html)
-* [mpv 原版官方的开发版手册（英文）](https://mpv.io/manual/master/)
-* [mpv 官方文档的汉化版-hooke007](https://github.com/hooke007/mpv_doc-CN)
+### `sub_export.lua`
+* **功能描述**：在上游 [sub_export.lua](https://github.com/dyphire/mpv-config/blob/master/scripts/sub_export.lua) 基础上实现导出 SRT 字幕的同时自动转换并生成一份 ASS 字幕
+* **`input.conf`写法示例**：
+
+```ini
+CTRL+s           script-message-to sub_export export-selected-subtitles                                                 #menu: 字幕 > 导出当前内封字幕
+```
+
+### `uosc_history.lua`
+* **来源**：[Koopex/uosc_history_menu](https://github.com/Koopex/uosc_history_menu)
+* **功能描述**：基于`uosc`框架，实现历史记录与收藏夹功能
+* **`input.conf`写法示例**：参考原仓库说明
+
+### `uosc_webdav.lua`
+* **功能描述**：参考修改自 [webdav.lua](https://gist.github.com/HedioKojima/fdbfdd73570650b01c809afb5ae7829b) ,基于`uosc`框架，实现 WebDAV 功能，支持自动识别与视频同目录下的外挂字幕
+* **`input.conf`写法示例**：
+
+```ini
+#                script-message open-webdav                                                                             #menu: 导航 > WebDAV > 打开 WebDAV 目录
+Q                script-message open-webdav-root                                                                        #menu: 导航 > WebDAV > 回到 WebDAV 根目录
+q                script-message webdav-back                                                                             ## 返回上一级
+c                script-message webdav-cycle-sort                                                                       #menu: 导航 > WebDAV > 切换 WebDAV 目录排序
+#                script-message webdav-toggle-sync-sort                                                                 #menu: 导航 > WebDAV > 开/关 继承 WebDAV 目录排序
+#                script-message webdav-toggle-video-only                                                                #menu: 导航 > WebDAV > 开/关 仅播放视频
+```
+
+### `winisland.lua`
+* **功能描述**：与 [WinIsland](https://github.com/Eatgrapes/WinIsland) 联动以在 mpv 播放音乐时实现类似手机音乐软件的灵动岛效果
+
+---
+
+## 🔄 与上游同步说明
+* 只保留和跟进经过二次修改后的上游脚本
+
+## 🤝 致谢
+
+* 感谢上游项目 [mpv-config](https://github.com/dyphire/mpv-config) 的优秀`mpv`配置
+* 感谢 mpv 社区中的各位脚本开发者，收录了一些他们编写的实用脚本
+* 感谢 mpv 社区中提供灵感与参考的各位，除了上游项目，还参考和借鉴了许多 github 内仓库中的`mpv`脚本
