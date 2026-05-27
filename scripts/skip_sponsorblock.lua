@@ -1,11 +1,12 @@
--- sponsorblock_minimal.lua
--- This script skip/mute sponsored segments of YouTube and bilibili videos
--- using data from https://github.com/ajayyy/SponsorBlock
--- and https://github.com/hanydd/BilibiliSponsorBlock
---
--- Added: manual mode with ASS button overlay, countdown progress bar,
---        mouse click and keyboard (y/n) support.
--- Added: Bilibili bangumi (ep) support via ep_id → BVID conversion.
+--[[ skip_sponsorblock.lua
+This script skip/mute sponsored segments of YouTube and bilibili videos
+using data from https://github.com/ajayyy/SponsorBlock
+and https://github.com/hanydd/BilibiliSponsorBlock
+
+Added: manual mode with ASS button overlay, countdown progress bar,
+       mouse click and keyboard (y/n) support.
+Added: Bilibili bangumi (ep) support via ep_id → BVID conversion.
+]]
 
 local opt = require 'mp.options'
 local utils = require 'mp.utils'
