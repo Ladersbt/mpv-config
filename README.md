@@ -41,6 +41,15 @@ t                 script-message-to clock toggle                                
 ### `dir_subs.lua`
 * **功能描述**：记录和恢复视频的字幕大小和位置状态，会影响同目录下所有视频的字幕状态
 
+### `embedded-lyrics.lua`
+* **功能描述**：自动提取音乐文件中的内嵌歌词并以字幕形式加载
+* **`input.conf`写法示例**：
+
+```ini
+#                script-message embedded-lyrics-toggle                                                                  #menu: 功能 > 歌词 > 开/关 自动加载内嵌歌词
+#                script-message embedded-lyrics-save                                                                    #menu: 功能 > 歌词 > 提取并保存内嵌歌词
+```
+
 ### `extract_fonts.lua`
 * **功能描述**：导出视频中的内封字体
 * **`input.conf`写法示例**：
