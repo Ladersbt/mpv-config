@@ -50,11 +50,37 @@ local sub_exts = {
 
 
 -- slang 优先级顺序，靠前的优先 select
-local slang = {"jpsc","chs","sc","zh-hans","zh-cn","jptc","cht","tc","zh-hant","zh-hk","zh-tw","chi","zho","zh"}
+-- 词组：匹配到即返回优先级；带 & 的条目要求两个关键词同时出现
+local slang = {
+    -- 双语字幕（中日）
+    "jpsc", "jptc", "chs&jap", "sc&jap", "cht&jap", "ch&jap", "tc&jap", "zh&jap",
+    "中日", "简日", "繁日", "双语", "雙語",
+    -- 双语字幕（中英）
+    "chs&eng", "sc&eng", "cht&eng", "ch&eng", "tc&eng", "zh&eng",
+    "中英", "中上英下", "简英", "简体&英文", "繁英", "繁体&英文", "繁體&英文",
+    -- 单语中文字幕
+    "特效", "chs", "sc", "zh-hans", "zh-cn", "简体中文",
+    "cht", "tc", "zh-hant", "zh-hk", "zh-tw", "繁体中文", "繁體中文",
+    "chi", "zho", "zh",
+    "中", "简", "繁", "simplified", "traditional",
+}
+
+-- 检查 name 是否匹配 slang 中的某个条目（支持 & 逻辑AND）
+local function slang_match(tag, name)
+    if tag:find("&", 1, true) then
+        for part in tag:gmatch("[^&]+") do
+            if not name:find(part, 1, true) then return false end
+        end
+        return true
+    else
+        return name:find(tag, 1, true) ~= nil
+    end
+end
+
 local function slang_priority(name)
     local lower = name:lower()
     for i, tag in ipairs(slang) do
-        if lower:find(tag, 1, true) then return i end
+        if slang_match(tag, lower) then return i end
     end
     return #slang + 1
 end
@@ -892,7 +918,7 @@ mp.register_script_message("webdav-play", function(play_url, is_video)
                         local title = mp.get_property(string.format("track-list/%d/title", i)) or ""
                         local candidate = (lang .. " " .. title):lower()
                         for j, tag in ipairs(slang) do
-                            if candidate:find(tag, 1, true) and j < best_priority then
+                            if slang_match(tag, candidate) and j < best_priority then
                                 best_priority = j
                                 best_sid = mp.get_property_number(string.format("track-list/%d/id", i))
                             end
