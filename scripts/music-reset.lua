@@ -1,6 +1,20 @@
--- music-reset.lua
--- 检测到带封面的音频文件时，自动将进度重置到开头
--- 解决历史记录脚本对音乐文件恢复进度的问题
+--[[   music-reset.lua
+     检测到带封面的音频文件时，自动将进度重置到开头
+     解决历史记录脚本对音乐文件恢复进度的问题
+]]
+
+local opt = require 'mp.options'
+
+local opts = {
+    enabled = true,
+}
+
+opt.read_options(opts, "music-reset")
+
+if opts.enabled == false then
+    mp.msg.debug("脚本已被初始化禁用")
+    return
+end
 
 local function reset_if_albumart()
     local track_list = mp.get_property_native("track-list")
@@ -13,7 +27,7 @@ local function reset_if_albumart()
                 local pos = mp.get_property_number("time-pos", 0)
                 if pos > 1 then
                     mp.set_property_number("time-pos", 0)
-                 -- mp.osd_message("音乐文件，重置到开头", 1)
+                    mp.msg.debug("检测到为歌曲，播放进度重置")
                 end
             end)
             return
