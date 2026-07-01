@@ -149,6 +149,7 @@ mp.register_script_message("webdav-cycle-sort", function()
     end
     state.dir_cursor[state.current_loaded_url] = nil
     sort_mod.apply_sort()
+    mp.osd_message("📶 排序: " .. (options.sort_labels[sort_mod.get_sort_mode()] or sort_mod.get_sort_mode()), 2)
     menu_mod.render_menu()
 end)
 

@@ -1,5 +1,7 @@
 --[[    uosc_webdav.lua
-主要借助 Claude 编写，参考和修改自 https://gist.github.com/HedioKojima/fdbfdd73570650b01c809afb5ae7829b 🙏🏻 
+        已由群组版本替代
+
+参考和修改自 https://gist.github.com/HedioKojima/fdbfdd73570650b01c809afb5ae7829b 🙏🏻 
 
 input.conf 写法示例:
 #                script-message open-webdav                                                                             #menu: 导航 > WebDAV > 打开 WebDAV 目录

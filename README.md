@@ -1,8 +1,11 @@
-基于上游优秀的`mpv`配置 [mpv-config](https://github.com/dyphire/mpv-config)，针对我个人需求做了部分修改以及补充一些脚本（部分来自其他仓库,部分基本完全借助`ai`编写 😂😂😂）
+基于上游优秀的`mpv`配置 [mpv-config](https://github.com/dyphire/mpv-config)，针对我个人需求做了部分修改以及补充一些脚本（部分来自其他仓库,部分基本完全借助`ai`编写）
 
 ---
 
 ## 🚀 二次修改或者新增脚本说明
+
+<details>
+<summary>点击展开脚本说明</summary>
 
 ### `autocopyshot.lua`
 * **功能描述**：在触发`mpv`原生视频截图的同时复制到系统剪贴板
@@ -58,6 +61,9 @@ t                 script-message-to clock toggle                                
 Ctrl+S           script-binding extract-fonts                                                                           #menu: 截取 > 视频 > 提取MKV视频内封字体
 ```
 
+### `music-reset.lua`
+* **功能描述**：检测到带封面的音频文件时，自动将播放进度重置到开头，解决历史记录脚本对音乐文件恢复进度的问题
+
 ### `skip_sponsorblock.lua`
 * **功能描述**：参考上游 [chapterskip.lua](https://github.com/dyphire/mpv-config/blob/master/scripts/chapterskip.lua) 与 [sponsorblock_minimal.lua](https://github.com/dyphire/mpv-config/blob/master/scripts/sponsorblock_minimal.lua)，实现流媒体播放时识别 B 站和 YouTube 的各种特殊片段，插入章节信息并提供交互按钮。可配合油猴脚本 [play-with-mpv](https://github.com/Ladersbt/userscript/tree/main/play-with-mpv)（参考修改自 [akiirui/userscript](https://github.com/akiirui/userscript/tree/main/play-with-mpv) 和 [LuckyPuppy514/external-player](https://github.com/LuckyPuppy514/external-player)）使用，在上游基础上增加了若干功能并调整了 UI
 
@@ -82,8 +88,9 @@ CTRL+s           script-message-to sub_export export-selected-subtitles         
 * **功能描述**：基于`uosc`框架，实现历史记录与收藏夹功能
 * **`input.conf`写法示例**：参考原仓库说明
 
-### `uosc_webdav.lua`
-* **功能描述**：参考修改自 [webdav.lua](https://gist.github.com/HedioKojima/fdbfdd73570650b01c809afb5ae7829b) ,基于`uosc`框架，实现 WebDAV 功能，支持自动识别与视频同目录下的外挂字幕
+### `uosc_webdav`
+* **来源**：参考修改自 [webdav.lua](https://gist.github.com/HedioKojima/fdbfdd73570650b01c809afb5ae7829b)
+* **功能描述**：基于`uosc`框架，实现 WebDAV 目录浏览与播放功能，支持多种排序、批量删除、外挂字幕自动匹配与内封字幕自动选轨、全目录连播列表、菜单实时搜索等
 * **`input.conf`写法示例**：
 
 ```ini
@@ -95,8 +102,12 @@ c                script-message webdav-cycle-sort                               
 #                script-message webdav-toggle-video-only                                                                #menu: 导航 > WebDAV > 开/关 仅播放视频
 ```
 
+> **Note**: 已由群组版本替代
+
 ### `winisland.lua`
 * **功能描述**：与 [WinIsland](https://github.com/Eatgrapes/WinIsland) 联动以在 mpv 播放音乐时实现类似手机音乐软件的灵动岛效果
+
+</details>
 
 ---
 
