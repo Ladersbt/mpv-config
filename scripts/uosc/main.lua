@@ -950,10 +950,7 @@ bind_command('show-in-directory', function()
 	if not state.path or is_protocol(state.path) then return end
 
 	if state.platform == 'windows' then
-	 -- utils.subprocess_detached({args = {'explorer', '/select,', state.path .. ' '}, cancellable = false})
-	 -- 改为 OneCommander
-	    local dir_path = serialize_path(state.path).dirname
-		utils.subprocess_detached({args = {'OneCommander', dir_path}, cancellable = false})
+	    utils.subprocess_detached({args = {'explorer', '/select,', state.path .. ' '}, cancellable = false})
 	elseif state.platform == 'darwin' then
 		utils.subprocess_detached({args = {'open', '-R', state.path}, cancellable = false})
 	elseif state.platform == 'linux' then
@@ -1075,9 +1072,7 @@ bind_command('open-config-directory', function()
 		local args
 
 		if state.platform == 'windows' then
-		 -- args = {'explorer', '/select,', config.path}
-	     -- 改为 OneCommander
-	        args = {'OneCommander', config.dirname}
+		    args = {'explorer', '/select,', config.path}
 		elseif state.platform == 'darwin' then
 			args = {'open', '-R', config.path}
 		elseif state.platform == 'linux' then

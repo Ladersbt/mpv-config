@@ -144,8 +144,10 @@ function Menu:init(data, callback, opts)
 	for _, menu in ipairs(self.all) do self:scroll_to_index(menu.selected_index, menu.id) end
 	if self.mouse_nav then self.current.selected_index = nil end
 
+    -- 幽灵模式：菜单实例存在（保留互斥、Curtain联动、on_close回调等机制），但不渲染任何面板也不注册键盘绑定
+	self.phantom = data.phantom or false
 	self:tween_property('opacity', 0, 1)
-	self:enable_key_bindings()
+	if not self.phantom then self:enable_key_bindings() end
 	Elements:maybe('curtain', 'register', self.id)
 
 	if data.search_submit then
@@ -1360,6 +1362,7 @@ function Menu:command_or_event(command, params, event)
 end
 
 function Menu:render()
+    if self.phantom then return end -- 幽灵模式跳过所有渲染
 	for _, menu in ipairs(self.all) do
 		if menu.fling then
 			local time_delta = state.render_last_time - menu.fling.time
@@ -1544,7 +1547,7 @@ function Menu:render()
 
 						-- Select action on cursor hover
 						if self.mouse_nav and get_point_to_rectangle_proximity(cursor, rect) <= 0 then
-							cursor:zone('primary_down', rect, self:create_action(function(shortcut)
+							cursor:zone('primary_click', rect, self:create_action(function(shortcut)
 								self:activate_selected_item(shortcut, true)
 							end))
 							blur_action_index = false

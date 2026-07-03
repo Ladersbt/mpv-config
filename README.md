@@ -83,10 +83,8 @@ KP1              script-message toggle_speed; script-message-to uosc flash-speed
 CTRL+s           script-message-to sub_export export-selected-subtitles                                                 #menu: 字幕 > 导出当前内封字幕
 ```
 
-### `uosc_history.lua`
-* **来源**：[Koopex/uosc_history_menu](https://github.com/Koopex/uosc_history_menu)
-* **功能描述**：基于`uosc`框架，实现历史记录与收藏夹功能
-* **`input.conf`写法示例**：参考原仓库说明
+### `uosc`
+* **来源**：整合 [上游](https://github.com/dyphire/mpv-config/tree/master/scripts/uosc) 和 [hooke007/mpv_PlayKit](https://github.com/hooke007/mpv_PlayKit/tree/main/portable_config/scripts/uosc) 特性
 
 ### `uosc_webdav`
 * **来源**：参考修改自 [webdav.lua](https://gist.github.com/HedioKojima/fdbfdd73570650b01c809afb5ae7829b)
@@ -103,6 +101,11 @@ c                script-message webdav-cycle-sort                               
 ```
 
 > **Note**: 已由群组版本替代
+
+### `uosc_history.lua`
+* **来源**：[Koopex/uosc_history_menu](https://github.com/Koopex/uosc_history_menu)
+* **功能描述**：基于`uosc`框架，实现历史记录与收藏夹功能
+* **`input.conf`写法示例**：参考原仓库说明
 
 ### `winisland.lua`
 * **功能描述**：与 [WinIsland](https://github.com/Eatgrapes/WinIsland) 联动以在 mpv 播放音乐时实现类似手机音乐软件的灵动岛效果

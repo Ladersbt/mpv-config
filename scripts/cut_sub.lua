@@ -1,11 +1,5 @@
 -- cut_sub.lua
 -- 功能：在 mpv 中标记 A/B 时间点，裁剪对应时间段的外挂 .ass 字幕和弹幕文件
--- 优化点：
---   1. 修复 gsub 时间戳替换的通配符 bug，改用精确位置拼接
---   2. A/B 顺序校验，B <= A 时自动提示并重置
---   3. OSD 消息合并输出，避免互相覆盖
---   4. 统一扫描同目录 .ass 文件，按关键词分类为弹幕 / 字幕，互不干扰
---   5. 控制台日志分类打印，不再混淆
 
 local mp    = require 'mp'
 local msg   = require 'mp.msg'
@@ -39,6 +33,102 @@ local function sec_to_ts(x)
     local m = math.floor((x % 3600) / 60)
     local s = x % 60
     return string.format("%d:%02d:%05.2f", h, m, s)
+end
+
+-- =============================================================================
+-- \move() 标签处理：裁剪后插值坐标，保持弹幕滚动速度不变
+-- =============================================================================
+
+--- 处理 ASS 文本中的 \move() 标签，根据时间偏移插值坐标
+local function process_tags(text, s_sec, e_sec, start_time, end_time)
+    if not text:find("\\move") then
+        return text
+    end
+
+    local orig_dur_ms = (e_sec - s_sec) * 1000
+    if orig_dur_ms <= 0 then
+        return text
+    end
+
+    local offset_ms = math.max(0, (start_time - s_sec) * 1000)
+    local new_dur_ms = (math.min(end_time, e_sec) - math.max(start_time, s_sec)) * 1000
+
+    return text:gsub("({[^}]-})", function(block)
+        -- 6 参数 \move(x1,y1,x2,y2,t1,t2)：偏移 t1,t2 时间
+        block = block:gsub("\\(move)%s*%(([^,]+),([^,]+),([^,]+),([^,]+),([^,]+),([^,]+)%)",
+            function(cmd, x1, y1, x2, y2, t1, t2)
+                local nt1, nt2 = tonumber(t1), tonumber(t2)
+                if not (nt1 and nt2) then
+                    return "\\" .. cmd .. "(" .. x1 .. "," .. y1 .. "," .. x2 .. "," .. y2 .. "," .. t1 .. "," .. t2 .. ")"
+                end
+                nt1 = math.max(0, nt1 - offset_ms)
+                nt2 = math.max(0, nt2 - offset_ms)
+                if nt2 > nt1 then
+                    return string.format("\\%s(%s,%s,%s,%s,%d,%d)", cmd, x1, y1, x2, y2, nt1, nt2)
+                else
+                    return string.format("\\%s\\pos(%s,%s)", cmd, x2, y2)
+                end
+            end)
+
+        -- 4 参数 \move(x1,y1,x2,y2)：插值坐标保持速度不变
+        block = block:gsub("\\(move)%s*%(([^,]+),([^,]+),([^,]+),([^,]+)%)",
+            function(cmd, x1, y1, x2, y2)
+                local nx1, ny1, nx2, ny2 = tonumber(x1), tonumber(y1), tonumber(x2), tonumber(y2)
+                if not (nx1 and ny1 and nx2 and ny2) then
+                    return "\\" .. cmd .. "(" .. x1 .. "," .. y1 .. "," .. x2 .. "," .. y2 .. ")"
+                end
+
+                if offset_ms > 0 then
+                    -- 弹幕起始早于裁剪起点：计算中间位置
+                    local elapsed_ratio = offset_ms / orig_dur_ms
+                    local visible_ratio = new_dur_ms / orig_dur_ms
+                    nx1 = nx1 + (nx2 - nx1) * elapsed_ratio
+                    ny1 = ny1 + (ny2 - ny1) * elapsed_ratio
+                    nx2 = nx1 + (nx2 - nx1) * visible_ratio
+                    ny2 = ny1 + (ny2 - ny1) * visible_ratio
+                elseif new_dur_ms < orig_dur_ms then
+                    -- 仅结尾被截断：插值终点坐标
+                    local ratio = new_dur_ms / orig_dur_ms
+                    nx2 = nx1 + (nx2 - nx1) * ratio
+                    ny2 = ny1 + (ny2 - ny1) * ratio
+                end
+
+                return string.format("\\%s(%d,%d,%d,%d)", cmd,
+                    math.floor(nx1 + 0.5), math.floor(ny1 + 0.5),
+                    math.floor(nx2 + 0.5), math.floor(ny2 + 0.5))
+            end)
+
+        return block
+    end)
+end
+
+--- 处理 Dialogue 行文本中的 \move() 标签
+--- 格式: Dialogue: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text
+local function process_move_tags(line, st, et, ab_start, ab_end)
+    if not line:find("\\move") then
+        return line
+    end
+
+    -- Text 字段位于第 9 个逗号之后
+    local count = 0
+    local text_start = nil
+    for i = 1, #line do
+        if line:sub(i, i) == ',' then
+            count = count + 1
+            if count == 9 then
+                text_start = i + 1
+                break
+            end
+        end
+    end
+
+    if not text_start then return line end
+
+    local before_text = line:sub(1, text_start - 1)
+    local text = line:sub(text_start)
+    local new_text = process_tags(text, st, et, ab_start, ab_end)
+
+    return before_text .. new_text
 end
 
 -- 安全替换 Dialogue 行中的时间戳（按字节位置定位，避免 gsub pattern 通配符问题）
@@ -91,9 +181,12 @@ local function cut_ass(input_path, output_path, ab_start, ab_end)
                     local st = ts_to_sec(sh)
                     local et = ts_to_sec(eh)
                     if st and et and et >= ab_start and st <= ab_end then
+                        local clip_duration = ab_end - ab_start
                         local new_sh = sec_to_ts(math.max(0, st - ab_start))
-                        local new_eh = sec_to_ts(math.max(0, et - ab_start))
+                        local new_eh = sec_to_ts(math.min(clip_duration, math.max(0, et - ab_start)))
                         local newline = replace_timestamps(line, sh, eh, new_sh, new_eh)
+                        -- 处理 \move() 标签，防止裁剪后弹幕滚动速度异常
+                        newline = process_move_tags(newline, st, et, ab_start, ab_end)
                         table.insert(event_lines, newline)
                     end
                 end
