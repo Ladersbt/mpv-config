@@ -38,30 +38,18 @@ function M.play_file(play_url, is_video_str)
         if item.play_url == play_url then target_pos = i - 1; break end
     end
 
-    if state.active_playlist_obs_id then
-        mp.unobserve_property(state.active_playlist_obs_id)
-        state.active_playlist_obs_id = nil
+    -- 先加载目标文件（立即播放正确文件，无闪烁），再追加其余文件，最后用 playlist-move 修正位置
+    local target_idx = target_pos + 1
+    mp.commandv("loadfile", file_items[target_idx].play_url, "replace")
+    for i = 1, #file_items do
+        if i ~= target_idx then
+            mp.commandv("loadfile", file_items[i].play_url, "append")
+        end
     end
-
-    mp.commandv("loadfile", file_items[1].play_url, "replace")
-    for i = 2, #file_items do
-        mp.commandv("loadfile", file_items[i].play_url, "append")
-    end
-
     if target_pos > 0 then
-        local expected = #file_items
-        local obs_id
-        local registered = false
-        obs_id = mp.observe_property("playlist-count", "number", function(_, count)
-            if not registered then return end
-            if count and count >= expected then
-                mp.unobserve_property(obs_id)
-                state.active_playlist_obs_id = nil
-                mp.commandv("playlist-play-index", target_pos)
-            end
-        end)
-        registered = true
-        state.active_playlist_obs_id = obs_id
+        -- 传 target_pos+1：playlist-move 的 index2 指向"目标条目"而非移动后下标，
+        -- 当 index1(0) < index2 时移动后实际停在 index2-1（mpv 手册明确此 paradox）
+        mp.commandv("playlist-move", 0, target_pos + 1)
     end
 
     local mode_hint = state.sync_playlist_sort

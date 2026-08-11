@@ -51,7 +51,6 @@ local state = {
     selected_dirs         = {},
     sync_playlist_sort    = false,
     file_loaded_registered = false,
-    active_playlist_obs_id = nil,
     menu_is_open          = false,
     delete_job = {
         active  = false,

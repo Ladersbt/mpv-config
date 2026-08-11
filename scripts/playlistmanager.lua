@@ -440,6 +440,13 @@ for mode, sort_data in pairs(sort_modes) do
   end
 end
 
+-- Expose sort state to user-data so other scripts (e.g. uosc) can read it.
+-- - sort-mode: the currently selected mode (next `s` key / `sort` message will use this)
+-- - active-sort-mode: the mode actually applied in the last `sortplaylist()` call,
+--   or empty string if the playlist has never been sorted by this script.
+mp.set_property_native('user-data/playlistmanager/sort-mode', sort_modes[sort_mode].id)
+mp.set_property_native('user-data/playlistmanager/active-sort-mode', '')
+
 function is_protocol(path)
   return type(path) == 'string' and path:find('^%a[%a%d-_]+://') ~= nil
 end
@@ -1350,6 +1357,7 @@ function sortplaylist(startover)
     mp.set_property('playlist-pos', 0)
   end
   current_sort_mode = sort_mode
+  mp.set_property_native('user-data/playlistmanager/active-sort-mode', sort_modes[sort_mode].id)
   if playlist_visible then
     showplaylist()
   end
@@ -1454,6 +1462,7 @@ function add_keybinds()
     sortplaylist()
     sort_mode = sort_mode + 1
     if sort_mode > #sort_modes then sort_mode = 1 end
+    mp.set_property_native('user-data/playlistmanager/sort-mode', sort_modes[sort_mode].id)
   end)
   bind_keys_forced(settings.key_reverseplaylist, "reverseplaylist", reverseplaylist)
   bind_keys_forced(settings.key_shuffleplaylist, "shuffleplaylist", shuffleplaylist)
@@ -1654,6 +1663,19 @@ function handlemessage(msg, value, value2)
     mp.commandv('show-text', strippedname ) ; return
   end
   if msg == "sort" then sortplaylist(value) ; return end
+  if msg == "set-sort-mode" then
+    -- value: sort mode id (e.g. "date-desc") or 1-based index (e.g. "3")
+    -- value2: "true" to restart playback from first item after sorting
+    for i, mode in ipairs(sort_modes) do
+      if mode.id == value or tostring(i) == tostring(value) then
+        sort_mode = i
+        mp.set_property_native('user-data/playlistmanager/sort-mode', mode.id)
+        sortplaylist(value2 == "true")
+        return
+      end
+    end
+    return
+  end
   if msg == "shuffle" then shuffleplaylist() ; return end
   if msg == "reverse" then reverseplaylist() ; return end
   if msg == "refresh" then playlist(true) ; return end

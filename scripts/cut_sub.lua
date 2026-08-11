@@ -79,13 +79,15 @@ local function process_tags(text, s_sec, e_sec, start_time, end_time)
                 end
 
                 if offset_ms > 0 then
-                    -- 弹幕起始早于裁剪起点：计算中间位置
-                    local elapsed_ratio = offset_ms / orig_dur_ms
-                    local visible_ratio = new_dur_ms / orig_dur_ms
-                    nx1 = nx1 + (nx2 - nx1) * elapsed_ratio
-                    ny1 = ny1 + (ny2 - ny1) * elapsed_ratio
-                    nx2 = nx1 + (nx2 - nx1) * visible_ratio
-                    ny2 = ny1 + (ny2 - ny1) * visible_ratio
+                    -- 弹幕起始早于裁剪起点：起点/终点都必须从【原始坐标】按各自比例插值
+                    -- （此前 nx2 误用已插值的 nx1 计算，终点比例错成 sr+vr-sr*vr，弹幕变慢且滚不到终点）
+                    local start_ratio = offset_ms / orig_dur_ms
+                    local end_ratio   = math.min(1, (offset_ms + new_dur_ms) / orig_dur_ms)
+                    local sx, sy = nx1, ny1  -- 保存原始起点，供两次插值共用
+                    nx1 = sx + (nx2 - sx) * start_ratio
+                    ny1 = sy + (ny2 - sy) * start_ratio
+                    nx2 = sx + (nx2 - sx) * end_ratio
+                    ny2 = sy + (ny2 - sy) * end_ratio
                 elseif new_dur_ms < orig_dur_ms then
                     -- 仅结尾被截断：插值终点坐标
                     local ratio = new_dur_ms / orig_dur_ms
