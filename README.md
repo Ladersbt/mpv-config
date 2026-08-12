@@ -102,10 +102,12 @@ c                script-message webdav-cycle-sort                               
 
 > **Note**: 已由群组版本替代
 
-### `uosc_history.lua`
+### `uosc_history`
 * **来源**：[Koopex/uosc_history_menu](https://github.com/Koopex/uosc_history_menu)
 * **功能描述**：基于`uosc`框架，实现历史记录与收藏夹功能
 * **`input.conf`写法示例**：参考原仓库说明
+
+> **Note**: 已由群组版本替代
 
 ### `winisland.lua`
 * **功能描述**：与 [WinIsland](https://github.com/Eatgrapes/WinIsland) 联动以在 mpv 播放音乐时实现类似手机音乐软件的灵动岛效果
