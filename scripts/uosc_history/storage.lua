@@ -77,13 +77,12 @@ function M.load(data_path)
     }
 end
 
---- 保存数据到日志文件
+--- 保存历史记录到文件（不含收藏夹数据）
 function M.save(data_path, data)
     local ok, json = pcall(require('mp.utils').format_json, {
         version = CURRENT_VERSION,
         options = data.options,
         entries = data.entries,
-        bookmark_entries = data.bookmark_entries,
     })
     if not ok then
         get_mp().msg.error('Log file format_json failed: ' .. (json or 'unknown error'))
@@ -93,6 +92,48 @@ function M.save(data_path, data)
     local file, err = io.open(data_path, 'w')
     if not file then
         get_mp().msg.error('Log file open failed: ' .. (err or 'unknown error'))
+        return false
+    end
+
+    file:write(json)
+    file:close()
+    return true
+end
+
+--- 从独立文件加载收藏夹；兼容 {bookmark_entries: [...]} 和裸数组 [...] 两种格式
+function M.load_bookmarks(data_path)
+    local file, err = io.open(data_path, 'r')
+    if not file then return nil end
+
+    local content = file:read('*a')
+    file:close()
+
+    if not content or content == '' then return nil end
+
+    local ok, data = pcall(require('mp.utils').parse_json, content)
+    if not ok or type(data) ~= 'table' then
+        get_mp().msg.warn('Bookmark file parse_json failed: ' .. (data or 'unknown error'))
+        return nil
+    end
+
+    if data.bookmark_entries then return data.bookmark_entries end
+    return data
+end
+
+--- 保存收藏夹到独立文件
+function M.save_bookmarks(data_path, bookmark_entries)
+    local ok, json = pcall(require('mp.utils').format_json, {
+        version = CURRENT_VERSION,
+        bookmark_entries = bookmark_entries,
+    })
+    if not ok then
+        get_mp().msg.error('Bookmark file format_json failed: ' .. (json or 'unknown error'))
+        return false
+    end
+
+    local file, err = io.open(data_path, 'w')
+    if not file then
+        get_mp().msg.error('Bookmark file open failed: ' .. (err or 'unknown error'))
         return false
     end
 

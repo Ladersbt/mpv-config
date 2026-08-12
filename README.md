@@ -88,7 +88,7 @@ CTRL+s           script-message-to sub_export export-selected-subtitles         
 
 ### `uosc_webdav`
 * **来源**：参考修改自 [webdav.lua](https://gist.github.com/HedioKojima/fdbfdd73570650b01c809afb5ae7829b)
-* **功能描述**：基于`uosc`框架，实现 WebDAV 目录浏览与播放功能，支持多种排序、批量删除、外挂字幕自动匹配与内封字幕自动选轨、全目录连播列表、菜单实时搜索等
+* **功能描述**：基于`uosc`框架，实现 WebDAV 目录浏览与播放功能，支持多种排序、批量删除、外挂字幕自动匹配与内封字幕自动选轨、全目录连播列表、菜单实时搜索等；菜单支持方向键导航（右键激活选中项、左键/退格返回上一级）
 * **`input.conf`写法示例**：
 
 ```ini
@@ -104,7 +104,11 @@ c                script-message webdav-cycle-sort                               
 
 ### `uosc_history`
 * **来源**：[Koopex/uosc_history_menu](https://github.com/Koopex/uosc_history_menu)
-* **功能描述**：基于`uosc`框架，实现历史记录与收藏夹功能
+* **功能描述**：基于`uosc`框架，实现历史记录与收藏夹功能；收藏夹独立存储于单独文件（`script-opts/uosc_history.conf` 中可配置路径），便于手动预设与编辑；搜索支持 `*` 通配符
+* **收藏夹迁移逻辑**：
+  * 首次运行（无任何文件）：空收藏，退出后生成历史与收藏两个独立文件
+  * 迁移场景（旧文件含收藏、新收藏文件不存在）：自动从旧文件加载收藏，退出时写入新文件
+  * 向后兼容：`storage.load()` 仍返回旧文件中的 `bookmark_entries` 作为迁移回退源；`storage.save()` 不再写入该字段，首次保存后历史文件中的旧收藏数据自动清理
 * **`input.conf`写法示例**：参考原仓库说明
 
 > **Note**: 已由群组版本替代

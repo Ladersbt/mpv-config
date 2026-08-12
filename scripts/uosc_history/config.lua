@@ -22,6 +22,9 @@ local defaults = {
 
     -- 日志文件路径（~~/ = 用户 home 目录）
     data_path = '~~/uosc_history.json',
+
+    -- 收藏夹文件路径（独立于历史记录，方便手动预设/编辑）
+    bookmark_data_path = '~~/uosc_history_bookmarks.json',
 }
 
 local M = {}

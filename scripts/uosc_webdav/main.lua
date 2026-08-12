@@ -25,6 +25,7 @@ c                script-message webdav-cycle-sort                               
 ]]
 
 local msg = require 'mp.msg'
+local mp_utils = require 'mp.utils'
 local options = require "modules.options"
 local utils = require "modules.utils"
 
@@ -196,6 +197,41 @@ mp.register_script_message("webdav-back", function()
     if parent_path then
         state.dir_cursor[state.current_loaded_url] = nil
         browse_mod.open_webdav_url(parent_path .. "/", false)
+    end
+end)
+
+-- ================= uosc 菜单回调（callback 模式） =================
+-- left/right 被 uosc 菜单 forced binding 拦截；设 callback 后未匹配的键以 key 事件转发到此，
+-- 据此实现右键激活选中项（= enter）、左键/backspace 返回上一级。
+mp.register_script_message('menu-event', function(json)
+    local event = mp_utils.parse_json(json)
+    if not event then return end
+
+    if event.type == 'activate' then
+        local v = event.value
+        if v and v ~= "" then
+            mp.command(v)
+            -- 仅播放文件需关菜单；目录导航/勾选等由 render_menu 的 update-menu 接管
+            if v:find("webdav-play", 1, true) then
+                mp.commandv("script-message-to", "uosc", "close-menu", "webdav_browser")
+                state.menu_is_open = false
+            end
+        end
+    elseif event.type == 'key' then
+        if event.key == "right" and event.selected_item then
+            local v = event.selected_item.value
+            if v and v ~= "" then
+                mp.command(v)
+                if v:find("webdav-play", 1, true) then
+                    mp.commandv("script-message-to", "uosc", "close-menu", "webdav_browser")
+                    state.menu_is_open = false
+                end
+            end
+        elseif event.key == "left" then
+            mp.commandv("script-message", "webdav-back")
+        end
+    elseif event.type == 'back' then
+        mp.commandv("script-message", "webdav-back")
     end
 end)
 

@@ -286,7 +286,7 @@ end
 function M.load_file(params)
     from_record = true
     local opts = string.format('start=%d', params.pos or 0)
-    if params.media_title and params.media_title ~= '' then
+    if params.url and params.media_title and params.media_title ~= '' then
         opts = string.format('%s,force-media-title="%s"', opts, params.media_title)
     end
     if params.audio_path then

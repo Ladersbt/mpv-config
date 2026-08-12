@@ -206,6 +206,7 @@ function M.render_menu()
         selected_index  = selected_index,
         search_style    = "on_demand",
         search_debounce = 300,
+        callback        = {mp.get_script_name(), 'menu-event'},
     }
 
     if state.is_delete_mode then

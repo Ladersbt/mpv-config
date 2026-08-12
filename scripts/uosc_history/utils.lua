@@ -116,12 +116,12 @@ function M.get_pos_in_folder(path, utils, platform)
     return string.format('%s / %s', current, #filenames)
 end
 
---- 搜索辅助：检查所有关键词是否匹配字符串
+--- 搜索辅助：检查所有关键词是否匹配字符串（支持 * 通配符，其余 pattern 特殊字符自动转义）
 function M.keywords_match(query, str)
     str = string.lower(str)
     for word in string.gmatch(string.lower(query), '[^%s]+') do
         if word ~= '' then
-            local regex = string.gsub(word, '%*', '.*')
+            local regex = word:gsub('%%', '%%%%'):gsub('([%^%$%(%)%.%[%]%+%-%?])', '%%%1'):gsub('%*', '.*')
             if not string.match(str, regex) then
                 return false
             end

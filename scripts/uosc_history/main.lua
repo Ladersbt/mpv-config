@@ -43,6 +43,7 @@ end
 -- 读取并展开配置
 local config = config_mod.read(script_name)
 config.data_path = config_mod.expand_path(config.data_path)
+config.bookmark_data_path = config_mod.expand_path(config.bookmark_data_path)
 
 -- 初始化运行时选项默认值
 config.log = true
@@ -145,15 +146,25 @@ local data_loaded = false
 local function load_data()
     if data_loaded then return end; data_loaded = true
     local data = storage.load(config.data_path)
+    local opts = {}
+    local history_entries = {}
+    local bookmark_entries
+
     if data then
-        local opts = data.options or {}
+        opts = data.options or {}
         if opts.filter == nil then opts.filter = 'recent' end
         if opts.log == nil then opts.log = true end
         if opts.quick_mark == nil then opts.quick_mark = false end
+        history_entries = data.entries or {}
+    end
 
-        history.init({entries = data.entries or {}, opts = opts, config = config, utils = utils, i18n = I18N})
-        bookmarks.init({entries = data.bookmark_entries or {}})
+    -- 收藏夹优先从独立文件加载；若不存在（首次迁移），回退到历史文件中的旧 bookmark_entries
+    bookmark_entries = storage.load_bookmarks(config.bookmark_data_path) or (data and data.bookmark_entries) or {}
 
+    history.init({entries = history_entries, opts = opts, config = config, utils = utils, i18n = I18N})
+    bookmarks.init({entries = bookmark_entries})
+
+    if data then
         if opts.log ~= nil then config.log = opts.log end
         if opts.filter ~= nil then config.filter = opts.filter end
         if opts.quick_mark ~= nil then config.quick_mark = opts.quick_mark end
@@ -317,16 +328,15 @@ local function on_unload(hook)
 end
 
 local function on_shutdown()
-    local data = {
+    storage.save(config.data_path, {
         options = {
             log = config.log,
             filter = history.get_filter(),
             quick_mark = config.quick_mark,
         },
         entries = history.get_entries(),
-        bookmark_entries = bookmarks.get_entries(),
-    }
-    storage.save(config.data_path, data)
+    })
+    storage.save_bookmarks(config.bookmark_data_path, bookmarks.get_entries())
 end
 
 -----------------------------------------------------------------------------
