@@ -8,6 +8,31 @@ function M.url_decode(str)
     return str
 end
 
+--- 解码 XML 实体，弥补 regex 解析 XML 时不会自动反转义的缺陷。
+--- WebDAV 服务器（如 OpenList/AList，基于 Go golang.org/x/net/webdav）
+--- 在 href 中使用原始字符（不做 URL 编码），仅依赖 XML 转义。
+--- 例如目录名 "A&B" 在 XML 中写作 <D:href>/path/A&amp;B/</D:href>，
+--- 若不解码 &amp;，构造的 URL 会包含字面 "&amp;"，导致服务器返回 404。
+--- 支持：&amp; &lt; &gt; &quot; &apos; &#NN; &#xNN;
+--- 注意必须单次扫描解码（gsub 一遍完成）：若分多次 gsub，前一遍的解码产物
+--- 会被后一遍当成新实体再次解码（如 &amp;lt; 被过度解码为 <，正确结果应为字面 &lt;）。
+local xml_entities = { amp = "&", lt = "<", gt = ">", quot = '"', apos = "'" }
+function M.xml_decode(str)
+    if not str then return str end
+    return (str:gsub("&(#?[%w]+);", function(e)
+        if e:sub(1, 1) == "#" then
+            -- 数字实体 &#NN; / &#xNN;；值域限制在单字节（0-255），
+            -- 越界保留原文避免 string.char 抛错中断解析循环
+            local is_hex = e:sub(2, 2):lower() == "x"
+            local v = tonumber(e:sub(is_hex and 3 or 2), is_hex and 16 or 10)
+            if v and v <= 255 then return string.char(v) end
+        elseif xml_entities[e] then
+            return xml_entities[e]
+        end
+        return "&" .. e .. ";" -- 未知/越界实体保留原文
+    end))
+end
+
 function M.format_size(bytes_str)
     local n = tonumber(bytes_str)
     if not n or n == 0 then return "" end

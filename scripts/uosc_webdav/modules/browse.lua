@@ -133,6 +133,8 @@ function M.open_webdav_url(target_url, force_refresh)
             raw_href = raw_href:match("https?://[^/]+(/.*)")
         end
 
+        -- 解码 XML 实体（&amp; → & 等），修复含 & 等特殊字符的目录/文件名
+        raw_href = utils.xml_decode(raw_href)
         local decoded_href = utils.url_decode(raw_href)
         local norm_decoded = decoded_href:gsub("/$", "")
 
