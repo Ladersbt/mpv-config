@@ -100,6 +100,8 @@ local function scan_sub_folder(folder_url)
             raw_href = raw_href:match("https?://[^/]+(/.*)")
         end
 
+        -- 解码 XML 实体（&amp; → & 等），与 browse.lua 保持一致
+        raw_href = utils.xml_decode(raw_href)
         local decoded_href = utils.url_decode(raw_href)
         local norm_decoded = decoded_href:gsub("/$", "")
 

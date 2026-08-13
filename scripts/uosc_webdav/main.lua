@@ -31,7 +31,7 @@ local utils = require "modules.utils"
 
 -- ================= 版本 =================
 
-VERSION = "1.1.0"
+VERSION = "2.0.0"
 mp.commandv('script-message', 'uosc_webdav-version', VERSION)
 
 -- ================= 加载模块 =================
@@ -203,6 +203,9 @@ end)
 -- ================= uosc 菜单回调（callback 模式） =================
 -- left/right 被 uosc 菜单 forced binding 拦截；设 callback 后未匹配的键以 key 事件转发到此，
 -- 据此实现右键激活选中项（= enter）、左键/backspace 返回上一级。
+-- 带修饰键的未匹配键（ctrl+right 等）也会被转发，需过滤以免误触发。
+-- close 事件用于同步 menu_is_open：open-menu 替换旧菜单同样触发 close（uosc 无条件回调），
+-- 需借 user-data/uosc/menu/type（uosc 打开时设置/关闭时清空）区分真关闭与替换。
 mp.register_script_message('menu-event', function(json)
     local event = mp_utils.parse_json(json)
     if not event then return end
@@ -218,7 +221,7 @@ mp.register_script_message('menu-event', function(json)
             end
         end
     elseif event.type == 'key' then
-        if event.key == "right" and event.selected_item then
+        if event.key == "right" and not event.modifiers and event.selected_item then
             local v = event.selected_item.value
             if v and v ~= "" then
                 mp.command(v)
@@ -227,11 +230,17 @@ mp.register_script_message('menu-event', function(json)
                     state.menu_is_open = false
                 end
             end
-        elseif event.key == "left" then
+        elseif event.key == "left" and not event.modifiers then
             mp.commandv("script-message", "webdav-back")
         end
     elseif event.type == 'back' then
         mp.commandv("script-message", "webdav-back")
+    elseif event.type == 'close' then
+        -- 仅当真关闭（uosc 中已无本菜单实例）才复位；
+        -- 替换场景下属性已是新菜单类型，复位会让下次 render 误走 open-menu 重开
+        if mp.get_property_native('user-data/uosc/menu/type') ~= 'webdav_browser' then
+            state.menu_is_open = false
+        end
     end
 end)
 
