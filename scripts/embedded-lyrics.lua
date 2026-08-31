@@ -1,14 +1,13 @@
---[[embedded-lyrics.lua
-自动提取音乐文件中的内嵌歌词并以字幕形式加载
-支持：MP3 / FLAC / OGG / M4A 等内嵌 LRC 歌词
-双语歌词（中日/中英/中韩）自动检测语言顺序，始终保持中文在上
-依赖：系统需安装 ffmpeg 且在 PATH 中
-安装：%APPDATA%\mpv\scripts\（Windows）或 ~/.config/mpv/scripts/（Linux/Mac）
-
-input.conf 绑定示例：
-  F8  script-message embedded-lyrics-toggle
-  F9  script-message embedded-lyrics-save
-]]
+-- embedded-lyrics.lua
+-- 自动提取音乐文件内嵌歌词并作为字幕加载的 mpv 脚本
+-- 支持：MP3 / FLAC / OGG / M4A 等内嵌 LRC 歌词
+-- 双语歌词（中日/中英/中韩）自动检测语言顺序，始终保持中文在上
+-- 依赖：系统需安装 ffmpeg 且在 PATH 中
+-- 安装：%APPDATA%\mpv\scripts\（Windows）或 ~/.config/mpv/scripts/（Linux/Mac）
+--
+-- input.conf 绑定示例：
+--   F8  script-message embedded-lyrics-toggle
+--   F9  script-message embedded-lyrics-save
 
 local mp = require("mp")
 local options = require 'mp.options'
@@ -18,9 +17,13 @@ local o = {
     font_name      = "Noto Sans CJK SC",  -- 字体名
     enabled        = true,                -- 默认是否启用（false = 启动时不自动加载）
     bilingual_gap  = 2.0,                 -- 双语合并最大时间间隔（秒），超过此值不合并
+    max_line_duration = 10.0,             -- 单行歌词最大显示时长（秒），间奏期超时提前结束，防字幕长驻留
 }
 
 options.read_options(o, "embedded_lyrics")
+
+-- 下限钳制：conf 误设 ≤0 时会生成零长/负长 Dialogue（libass 视为不可见），至少保留 0.5 秒
+if o.max_line_duration < 0.5 then o.max_line_duration = 0.5 end
 
 -- ========================
 
@@ -88,7 +91,10 @@ local function extract_lyrics_via_ffmetadata(path)
         return nil
     end
     local f = io.open(tmp_meta, "rb")
-    if not f then return nil end
+    if not f then
+        os.remove(tmp_meta)  -- 打开失败也要清理临时文件，避免残留
+        return nil
+    end
     local raw = f:read("*all")
     f:close()
     os.remove(tmp_meta)
@@ -99,10 +105,14 @@ local function extract_lyrics_via_ffmetadata(path)
         if line:lower():match("^lyrics[^=]*=") then
             local val = line:match("^[^=]+=(.*)$") or ""
             val = val:gsub("<<NL>>", "\n")
-            val = val:gsub("\\n", "\n")
-            val = val:gsub("\\;", ";")
-            val = val:gsub("\\#", "#")
-            val = val:gsub("\\\\", "\\")
+            -- 反转义须单趟扫描完成，分步 gsub 有顺序陷阱：先解 \n 会把字面量
+            -- \n（ffmetadata 写作 \\n）误展开成换行；先解 \\ 又会吃掉刚生成的
+            -- \n。单趟规则对每个序列只处理一次，且顺带覆盖 \= 等 ffmetadata
+            -- 全部特殊字符（\ = ; # 换行）的转义
+            val = val:gsub("\\(.)", function(c)
+                if c == "n" then return "\n" end
+                return c
+            end)
             val = val:match("^%s*(.-)%s*$") or val
             if #val > 5 then
                 lyrics = val
@@ -119,6 +129,10 @@ local function parse_lrc(text)
     local time_order    = {}
     local seen_times    = {}
 
+    -- [offset:+/-毫秒] 全局偏移标签：按主流播放器约定，正值整体提前（时间戳减去偏移）
+    -- 支持小数毫秒（如 +12.5）；要求闭括号，避免误吞后续正文
+    local offset_sec = (tonumber(text:lower():match("%[offset:%s*([%-%+]?%d+%.?%d*)%s*%]")) or 0) / 1000
+
     for line in (text .. "\n"):gmatch("([^\n]*)\n") do
         local tags   = {}
         local content = line
@@ -128,20 +142,25 @@ local function parse_lrc(text)
             else break end
         end
         content = content:match("^%s*(.-)%s*$") or ""
+        -- 剥离增强型 LRC（A2 扩展）的逐字时间戳标签，如 <00:01.30>，避免污染正文
+        content = content:gsub("<%d+:%d+[%.%d]*>", "")
+        content = content:match("^%s*(.-)%s*$") or ""
 
         if #tags > 0 and content ~= "" then
             for _, tag in ipairs(tags) do
                 local min, sec = tag:match("^(%d+):(%d+%.?%d*)$")
                 if not min then min, sec = tag:match("^(%d+):(%d+)$") end
                 if min and sec then
-                    local t   = tonumber(min) * 60 + tonumber(sec)
-                    local key = string.format("%.3f", t)
-                    if not seen_times[key] then
-                        seen_times[key] = true
-                        table.insert(time_order, t)
-                        time_to_lines[key] = {}
+                    local t   = tonumber(min) * 60 + tonumber(sec) - offset_sec
+                    if t >= 0 then
+                        local key = string.format("%.3f", t)
+                        if not seen_times[key] then
+                            seen_times[key] = true
+                            table.insert(time_order, t)
+                            time_to_lines[key] = {}
+                        end
+                        table.insert(time_to_lines[key], content)
                     end
-                    table.insert(time_to_lines[key], content)
                 end
             end
         end
@@ -241,6 +260,10 @@ local function detect_lang(line)
 
     if kana >= 2 then return "ja" end
     if hangul >= 2 then return "ko" end
+    -- 日语汉字主导行常只有零星假名（如「遺書の文字」仅 1 个假名），
+    -- 出现假名且有汉字即判日文：中文文本几乎不含假名，误判面小；
+    -- 否则此类行落入 other，被双语合并的条件排除导致无法分层
+    if kana >= 1 and cjk >= 1 then return "ja" end
     if cjk >= 2 and kana == 0 then return "zh" end
     if ascii >= 3 then return "en" end
     return "other"
@@ -290,55 +313,44 @@ local function merge_adjacent_bilingual(entries)
     return merged
 end
 
--- 全局扫描，用投票决定第一行/第二行各是什么语言
+-- 全局扫描：对每个多行条目的第一行逐行判定语言并计票，多数决定整曲方向
 -- 返回 swap=true 表示需要交换（第一行不是中文）
-
+-- 用逐行投票而非字节求和：单行的装饰性假名（如中文里的「恋爱の季节」）只占
+-- 一票，不会像字节累计那样以一票定全局地翻转整曲方向
 local function detect_swap(entries)
-    local kana1, kana2     = 0, 0
-    local hangul1, hangul2 = 0, 0
-    local cjk1, cjk2       = 0, 0
-    
-    local lang_name = { zh="中文", ja="日文", ko="韩文", en_or_other="英文/其他" }
+    local lang_name = { zh="中文", ja="日文", ko="韩文", en="英文", other="其他" }
+    local votes = {}
 
     for _, entry in ipairs(entries) do
         if #entry.lines >= 2 then
             local l1 = entry.lines[1]
-            local l2 = entry.lines[2]
             -- 跳过元数据行（含冒号且较短）和分隔行
-            local is_meta = (l1:match("[：:]") and #l1 < 40) or l1:match("^%-%-%-")
+            -- 冒号检测必须用纯文本查找：模式字符类按字节匹配，
+            -- [：:] 会把含 0xEF/0xBC/0x9A 任一字节的汉字（如「的」E7 9A 84）误判为含冒号
+            local has_colon = l1:find("：", 1, true) ~= nil or l1:find(":", 1, true) ~= nil
+            local is_meta = (has_colon and #l1 < 40) or l1:match("^%-%-%-") ~= nil
             if not is_meta then
-                kana1   = kana1   + count_kana(l1)
-                kana2   = kana2   + count_kana(l2)
-                hangul1 = hangul1 + count_hangul(l1)
-                hangul2 = hangul2 + count_hangul(l2)
-                cjk1    = cjk1    + count_cjk(l1)
-                cjk2    = cjk2    + count_cjk(l2)
+                local lang = detect_lang(l1)
+                votes[lang] = (votes[lang] or 0) + 1
             end
         end
     end
 
-    mp.msg.info(string.format(
-        "统计 假名1:%d 假名2:%d | 谚文1:%d 谚文2:%d | CJK1:%d CJK2:%d",
-        kana1, kana2, hangul1, hangul2, cjk1, cjk2
-    ))
-
-    -- 修复：用绝对数量判断语言，而不是纯相对比较，减少 CJK 相近时的误判
-    local function classify(kana, hangul, cjk)
-        if kana > 5 then return "ja"
-        elseif hangul > 5 then return "ko"
-        elseif cjk > 3 then return "zh"
-        else return "en_or_other" end
+    -- 多数票决定行1的主导语言；平票保守取 zh 不翻转（维持「中文恒在上」）
+    local dominant = "zh"
+    local best = votes["zh"] or 0
+    for lang, n in pairs(votes) do
+        if n > best then dominant, best = lang, n end
     end
 
-    local lang1 = classify(kana1, hangul1, cjk1)
-    local lang2 = classify(kana2, hangul2, cjk2)
+    mp.msg.info(string.format(
+        "方向投票：中文=%d 日文=%d 韩文=%d 英文=%d 其他=%d",
+        votes["zh"] or 0, votes["ja"] or 0, votes["ko"] or 0, votes["en"] or 0, votes["other"] or 0))
+    mp.msg.info("行1主导=" .. (lang_name[dominant] or dominant))
 
-    mp.msg.info(string.format("语言检测：行1=%s  行2=%s",lang_name[lang1] or lang1,lang_name[lang2] or lang2))
-
-    local swap = (lang1 ~= "zh")
+    local swap = (dominant ~= "zh")
     if swap then
-        mp.msg.info("检测第一行语言: " .. (lang_name[lang1] or lang1) .. "，自动交换为中文在上")
-        mp.msg.info("行顺序已调整：" .. (lang_name[lang2] or lang2) .. "→上  " .. (lang_name[lang1] or lang1) .. "→下")
+        mp.msg.info("自动交换为中文在上")
     end
     return swap
 end
@@ -390,6 +402,10 @@ local function build_ass(entries)
         if i < #entries then end_time = entries[i+1].time
         else end_time = entry.time + 5 end
         if end_time <= entry.time then end_time = entry.time + 0.5 end
+        -- 间奏防长驻留：单行显示时长不超过 max_line_duration，超时提前结束
+        if end_time - entry.time > o.max_line_duration then
+            end_time = entry.time + o.max_line_duration
+        end
 
         local start_str = to_ass_time(entry.time)
         local end_str   = to_ass_time(end_time)
@@ -414,9 +430,11 @@ local function build_ass(entries)
                     start_str, end_str, line1
                 ))
             else
-                -- 修复：拆分为两条独立 Dialogue（Layer 不同），
-                -- 用 {\an8} 把主语言放顶部，译文放默认底部（Alignment=2）
-                -- 这样彻底避免行内 override tag 残留问题
+                -- 拆分为两条独立 Dialogue（Layer 与 Style 均不同）：
+                -- 主语言用 Default（MarginV=75），译文用 Trans（MarginV=31），
+                -- 同为底部对齐（Alignment=2），靠 MarginV 垂直错位实现上下分层；
+                -- 不写任何行内 override tag，规避 tag 解析残留问题。
+                -- 已知限制：同一时间戳下第三行及以后在此被丢弃（parse_lrc 允许同刻多行，罕见）
                 table.insert(lines, string.format(
                     "Dialogue: 0,%s,%s,Default,,0,0,0,,%s",
                     start_str, end_str, line1
@@ -432,21 +450,29 @@ local function build_ass(entries)
     return table.concat(lines, "\n") .. "\n"
 end
 
--- 纯文本歌词转 SRT（无时间戳，固定间隔展示）
-local function lyrics_to_srt(text)
+-- 纯文本歌词转 SRT（无时间戳；有音频总时长时按实际时长均分展示区间，否则固定 3 秒/行）
+local function lyrics_to_srt(text, total_dur)
     local lines = {}
     for line in (text .. "\n"):gmatch("([^\n]*)\n") do
         line = line:match("^%s*(.-)%s*$")
         if line ~= "" then table.insert(lines, line) end
     end
     if #lines == 0 then return nil end
+    local lead, tail = 0.5, 2.0   -- 首行前留白与末行后留白（秒）
+    local step = 3
+    if total_dur and total_dur > lead + tail + #lines * 1.5 then
+        step = (total_dur - lead - tail) / #lines
+    end
     local srt = {}
     for i, line in ipairs(lines) do
-        local s = (i-1) * 3
-        local e = i * 3
+        local s = lead + (i - 1) * step
+        local e = s + step
         local function fmt(sec)
-            return string.format("%02d:%02d:%02d,000",
-                math.floor(sec/3600), math.floor((sec%3600)/60), sec%60)
+            local ms = math.floor((sec % 1) * 1000 + 0.5)
+            if ms >= 1000 then ms = 999 end
+            local t = math.floor(sec)
+            return string.format("%02d:%02d:%02d,%03d",
+                math.floor(t / 3600), math.floor((t % 3600) / 60), t % 60, ms)
         end
         table.insert(srt, tostring(i))
         table.insert(srt, fmt(s) .. " --> " .. fmt(e))
@@ -474,7 +500,8 @@ local function load_subtitle_file(path, title)
 end
 
 -- ===== 核心加载函数 =====
-local function load_lyrics(path)
+-- notify_miss：手动触发（开关启用）时无歌词给 OSD 反馈；自动加载保持静默
+local function load_lyrics(path, notify_miss)
     current_ass_content = nil
     loaded_sub_id       = nil
 
@@ -496,6 +523,9 @@ local function load_lyrics(path)
     local lyrics = extract_lyrics_via_ffmetadata(path)
     if not lyrics or #lyrics <= 5 then
         mp.msg.info("未找到内嵌歌词")
+        if notify_miss then
+            mp.osd_message("♪ 未找到内嵌歌词", 3)
+        end
         return
     end
 
@@ -516,8 +546,8 @@ local function load_lyrics(path)
             end
         end
     else
-        -- 纯文本歌词，提示用户这是静态展示
-        local srt = lyrics_to_srt(lyrics)
+        -- 纯文本歌词，提示用户这是静态展示；展示区间按音频时长均分
+        local srt = lyrics_to_srt(lyrics, mp.get_property_number("duration"))
         if srt then
             local tmp_srt = make_tmp_path(".srt")
             local f = io.open(tmp_srt, "w")
@@ -525,7 +555,7 @@ local function load_lyrics(path)
                 f:write(srt)
                 f:close()
                 load_subtitle_file(tmp_srt, "内嵌歌词")
-                mp.osd_message("♪ 已加载内嵌歌词（纯文本，固定间隔展示）", 4)
+                mp.osd_message("♪ 已加载内嵌歌词（纯文本，按歌曲时长均分展示）", 4)
             end
         end
     end
@@ -552,17 +582,16 @@ mp.register_script_message("embedded-lyrics-toggle", function()
         mp.osd_message("♪ 内嵌歌词：已启用", 3)
         local path = mp.get_property("path")
         if path and is_audio(path) then
-            load_lyrics(path)
+            load_lyrics(path, true)
         end
     else
         mp.osd_message("♪ 内嵌歌词：已禁用", 3)
-        -- 修复：精确移除已加载的字幕轨，而不是无参调用 sub-remove
+        -- 仅精确移除本脚本加载的歌词轨；没有记录时什么都不做——
+        -- 无参 sub-remove 会移除当前选中的外挂字幕轨（mpv 限定仅外挂轨生效，
+        -- 内挂轨免疫），播放视频时误点本开关会踢掉正在观看的外挂字幕
         if loaded_sub_id then
             mp.commandv("sub-remove", tostring(loaded_sub_id))
             loaded_sub_id = nil
-        else
-            -- 回退：没有记录 ID 时移除当前选中轨
-            mp.commandv("sub-remove")
         end
     end
 end)

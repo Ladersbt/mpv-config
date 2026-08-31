@@ -73,13 +73,6 @@ local function normalize_path(path)
     return path
 end
 
--- 计算表长度（用于 debug 日志）
-local function table_length(t)
-    local count = 0
-    for _ in pairs(t) do count = count + 1 end
-    return count
-end
-
 -- 加载状态
 local function load_state()
     local ok, err = pcall(function()
@@ -99,7 +92,6 @@ local function load_state()
             msg.warn("JSON 解析失败，将重置状态: " .. tostring(parse_err))
         else
             dir_state = data
-         -- if o.debug then msg.info("已加载 " .. table_length(dir_state) .. " 条记录") end
         end
     end)
 
@@ -120,22 +112,25 @@ local function check_parent_dir()
 end
 
 -- 保存状态（实际写入）——套 pcall 保护，shutdown 阶段也安全
+-- 顺序：先 format_json 拿到字符串，确认可序列化后再开文件写盘，
+-- 这样序列化失败时磁盘分毫不动（不会因为 io.open "w" 截断旧档后才发现写不出去）
 local function save_state_now()
     local ok, err = pcall(function()
-        
         if not check_parent_dir() then
             error("父目录不存在或已被删除: " .. state_path_abs)
         end
-        
+
+        local json_str = utils.format_json(dir_state)
+        if not json_str then
+            -- 文档说 format_json 失败返回 nil, err；实测本版本(0.41.0)失败会抛 Lua error
+            -- （"disallowed Lua type found"），由外层 pcall 兜住并记入 msg.error。
+            -- 本脚本 dir_state 仅含 number 字段，理论不可达；保留兜底防未来加入不可序列化值。
+            return
+        end
+
         local file = io.open(state_path_abs, "w")
         if not file then
             error("无法写入文件: " .. state_path_abs)
-        end
-
-        local json_str, format_err = utils.format_json(dir_state)
-        if not json_str then
-            file:close()
-            error("JSON 格式化失败: " .. tostring(format_err))
         end
 
         file:write(json_str)
@@ -172,13 +167,17 @@ local function apply_state()
     if not dir or not dir_state[dir] then return end
 
     local entry = dir_state[dir]
+    local applied = {}
     if entry.sub_scale then
         mp.set_property_number("sub-scale", entry.sub_scale)
-        if o.debug then msg.info("应用 sub-scale: " .. entry.sub_scale) end
+        applied[#applied + 1] = "sub-scale=" .. entry.sub_scale
     end
     if entry.sub_pos then
         mp.set_property_number("sub-pos", entry.sub_pos)
-        if o.debug then msg.info("应用 sub-pos: " .. entry.sub_pos) end
+        applied[#applied + 1] = "sub-pos=" .. entry.sub_pos
+    end
+    if o.debug and #applied > 0 then
+        msg.info("应用字幕状态: " .. table.concat(applied, ", "))
     end
 end
 
@@ -212,10 +211,7 @@ if ensure_parent_dir_exists() then
         -- 先取消还未触发的防抖 timer，再立即写入，确保退出前数据不丢失
         if save_timer then save_timer:kill() end
         save_state_now()
-        if o.debug then msg.info("退出前已保存字幕状态") end
     end)
-
- -- if o.debug then msg.info("脚本初始化完成，存储位置: " .. state_path_abs) end
 else
     msg.error("初始化失败：无法访问或创建存储目录")
 end

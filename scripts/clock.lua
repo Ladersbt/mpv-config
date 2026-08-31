@@ -29,7 +29,6 @@ local opts = {
     -- === 第二行左侧：还需时长 ===
     size_left     = 35,          
     color_left    = "EEEEEE",
-    -- 【新增】独立描边颜色
     border_color_left = "000000",    
     icon_left     = "󱫟 ",       
     text_left     = "还需",      
@@ -37,7 +36,6 @@ local opts = {
     -- === 第二行右侧：预计结束时间 ===
     size_end      = 35,          
     color_end     = "DDDDDD",    
-    -- 【新增】独立描边颜色
     border_color_end = "000000",
     icon_end      = " ",       
     text_end      = "预计结束",   
@@ -55,9 +53,9 @@ options.read_options(opts, "clock")
 local clock_overlay = mp.create_osd_overlay('ass-events')
 local overlay_visible = opts.enabled_by_default
 local update_timer = nil
+local last_ass_data = nil -- 缓存上次 data，内容未变化时跳过无意义的重绘
 
 -- 辅助：生成 ASS 样式标签
--- 【修改】新增 b_color 参数用于接收描边颜色
 local function style(text, font, size, color, b_color, bold)
     local s = ""
     if font and font ~= "" then s = s .. "\\fn" .. font end
@@ -121,7 +119,7 @@ local function get_clock_content()
     local rem = mp.get_property_native("playtime-remaining") 
     if rem and rem > 0 then
         local dt = os.date("*t", now_unix)
-        dt.sec = dt.sec + rem
+        dt.sec = math.floor(dt.sec + rem) -- 亚秒截断：os.time 以整数收字段
         local end_time = os.date(opts.time_format, os.time(dt))
         part_end_raw = opts.icon_end .. opts.text_end .. " " .. end_time
         -- 传入 border_color_end
@@ -150,6 +148,8 @@ local function get_clock_content()
     end
 
     -- === 3. 计算居中填充 ===
+    -- 填充方向由对齐锚点决定：右对齐时行尾垫可见文字被向左推；左对齐时须垫在行首；
+    -- 居中对齐下两行本就同锚居中，不垫。
     if opts.auto_center and raw_line2 ~= "" then
         local len1 = string.len(raw_line1) 
         local len2 = string.len(raw_line2)
@@ -157,7 +157,13 @@ local function get_clock_content()
             local diff = len2 - len1
             local pad_count = math.floor((diff / 2) * opts.center_correction)
             if pad_count > 0 then
-                ass_line1 = ass_line1 .. string.rep("\\h", pad_count)
+                local pad = string.rep("\\h", pad_count)
+                local pos_key = tostring(opts.position):lower():gsub("[%s%-_]", "")
+                if pos_key:find("left") then
+                    ass_line1 = pad .. ass_line1
+                elseif pos_key:find("right") then
+                    ass_line1 = ass_line1 .. pad
+                end
             end
         end
     end
@@ -169,13 +175,17 @@ local function get_clock_content()
     end
 end
 
-local function update_clock()
+local function update_clock(force)
     if not overlay_visible then return end
     local align_tag = get_alignment_tag(opts.position)
     local alpha_tag = "\\alpha&H" .. opts.alpha .. "&"
-    local content = get_clock_content()
-    clock_overlay.data = "{" .. align_tag .. alpha_tag .. "}" .. content
-    clock_overlay:update()
+    local ass_data = "{" .. align_tag .. alpha_tag .. "}" .. get_clock_content()
+    -- 时钟内容粒度 1 秒，0.5s 周期下约半数 tick 内容相同：未变化时跳过重绘
+    if force or ass_data ~= last_ass_data then
+        clock_overlay.data = ass_data
+        clock_overlay:update()
+        last_ass_data = ass_data
+    end
 end
 
 local function activate_timer()
@@ -201,7 +211,7 @@ mp.register_script_message("toggle", function()
         overlay_visible = false
     else
         overlay_visible = true
-        update_clock()
+        update_clock(true) -- 强制重绘：remove() 后 overlay 需 update() 才会重新上屏
         activate_timer()
     end
 end)
