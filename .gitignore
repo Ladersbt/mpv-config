@@ -2,7 +2,7 @@
 *.xml
 *.txt
 config.json
-
+.serena
 cache/
 state/
 files/

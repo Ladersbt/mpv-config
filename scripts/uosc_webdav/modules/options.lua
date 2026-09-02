@@ -59,6 +59,8 @@ M.sort_labels = {
     name_desc = "名称 Z→A",
     time_desc = "时间 新→旧",
     time_asc  = "时间 旧→新",
+    size_desc = "大小 大→小",
+    size_asc  = "大小 小→大",
 }
 
 -- 月份映射

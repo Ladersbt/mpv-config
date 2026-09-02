@@ -54,31 +54,15 @@ local function mount_subs(items)
     end
 end
 
--- ======== 字幕文件夹扫描（通过 curl PROPFIND） ========
+-- ======== 字幕文件夹扫描（通过 curl PROPFIND，异步） ========
 
---- 扫描单个字幕文件夹，返回其中字幕文件列表。
+--- 解析 PROPFIND 响应，返回字幕文件列表（同步纯解析，不发请求）。
+--- @param ok boolean command_native_async 回调的 ok
+--- @param res table|nil subprocess 结果
 --- @param folder_url string 字幕文件夹的完整 WebDAV URL
 --- @return table { name, play_url, file_url }[]
-local function scan_sub_folder(folder_url)
-    local args = {
-        "curl", "-s",
-        "-w", "\n---HTTP_CODE---%{http_code}",
-        "-X", "PROPFIND",
-        "-u", options.opts.user .. ":" .. options.opts.pass,
-        "-H", "Depth: 1",
-        "--max-time", "10",
-        folder_url
-    }
-
-    local res = mp.command_native({
-        name = "subprocess",
-        playback_only = false,
-        capture_stdout = true,
-        capture_stderr = true,
-        args = args
-    })
-
-    if res.status ~= 0 then return {} end
+local function parse_sub_props(ok, res, folder_url)
+    if not ok or not res or res.status ~= 0 then return {} end
 
     local body, http_code_str = res.stdout:match("^(.*)\n---HTTP_CODE---(%d+)$")
     if not body then
@@ -126,35 +110,71 @@ local function scan_sub_folder(folder_url)
     return subs
 end
 
---- 在当前目录的 cached_dir_items 中查找字幕文件夹，逐个扫描并挂载。
+--- 异步扫描单个字幕文件夹，完成后 callback(subs)。
+--- 不阻塞 file-loaded：视频先播，字幕扫描结果晚到再挂载。
+local function scan_sub_folder_async(folder_url, callback)
+    local args = {
+        "curl", "-s",
+        "--connect-timeout", "5",
+        "-w", "\n---HTTP_CODE---%{http_code}",
+        "-X", "PROPFIND",
+        "-u", options.opts.user .. ":" .. options.opts.pass,
+        "-H", "Depth: 1",
+        "--max-time", "10",
+        folder_url
+    }
+
+    mp.command_native_async({
+        name = "subprocess",
+        playback_only = false,
+        capture_stdout = true,
+        capture_stderr = true,
+        args = args
+    }, function(ok, res)
+        callback(parse_sub_props(ok, res, folder_url))
+    end)
+end
+
+--- 挂载前确认播放的仍是发起扫描时的那个文件：
+--- 异步扫描期间用户可能已切集，迟到的结果挂到新文件上会张冠李戴。
+local function mount_if_still_current(video_play_url, items)
+    if (mp.get_property("path") or "") ~= video_play_url then
+        msg.verbose("字幕扫描回调到达时已换文件，丢弃")
+        return
+    end
+    mount_subs(items)
+end
+
+--- 在当前目录的 cached_dir_items 中查找字幕文件夹，并行扫描，全部返回后挂载。
 --- @param video_name string 视频文件名（含扩展名）
-function M.attach_subs_from_folders(video_name)
+--- @param video_play_url string 发起时的视频 play_url，用于换集守卫
+function M.attach_subs_from_folders(video_name, video_play_url)
     local vstem = video_name:match("^(.+)%.[^%.]+$") or video_name
     if vstem == "" then return end
     local vstem_lower = vstem:lower()
 
-    local matched_subs = {}
-    local folder_scanned = false
-
+    local folders = {}
     for _, item in ipairs(state.cached_dir_items) do
         if item.is_dir then
-            -- 检查文件夹名是否在 sub_dir_names 中
             local dir_lower = item.name:lower()
-            local is_sub_folder = false
             for _, dir_name in ipairs(options.sub_dir_names) do
                 if dir_lower == dir_name then
-                    is_sub_folder = true
+                    table.insert(folders, item)
                     break
                 end
             end
-            if not is_sub_folder then goto continue end
+        end
+    end
+    if #folders == 0 then return end
 
-            -- 已找到字幕文件夹，扫描
-            local subs = scan_sub_folder(item.url)
-            folder_scanned = true
-            if #subs == 0 then goto continue end
+    -- 并行发起所有字幕文件夹的 PROPFIND，计数器等全部返回再统一排序挂载
+    local matched_subs = {}
+    local pending = #folders
+    local any_scanned = false
 
-            -- 过滤出与视频同名的字幕文件
+    for _, folder in ipairs(folders) do
+        scan_sub_folder_async(folder.url, function(subs)
+            if #subs > 0 then any_scanned = true end
             for _, sub in ipairs(subs) do
                 local sstem = (sub.name:match("^(.+)%.[^%.]+$") or sub.name):lower()
                 local start_pos = sstem:find(vstem_lower, 1, true)
@@ -165,19 +185,20 @@ function M.attach_subs_from_folders(video_name)
                     end
                 end
             end
-        end
-        ::continue::
-    end
 
-    if #matched_subs == 0 then
-        if folder_scanned then
-            msg.verbose("字幕文件夹存在但未找到匹配视频的字幕文件")
-        end
-        return
+            pending = pending - 1
+            if pending == 0 then
+                if #matched_subs == 0 then
+                    if any_scanned then
+                        msg.verbose("字幕文件夹存在但未找到匹配视频的字幕文件")
+                    end
+                    return
+                end
+                sort_by_slang(matched_subs)
+                mount_if_still_current(video_play_url, matched_subs)
+            end
+        end)
     end
-
-    sort_by_slang(matched_subs)
-    mount_subs(matched_subs)
 end
 
 -- ======== 统一入口 ========
@@ -193,13 +214,13 @@ function M.attach_subs_for(video_play_url)
     local sidecar = match_sidecar_subs(vname)
     if #sidecar > 0 then
         sort_by_slang(sidecar)
-        mount_subs(sidecar)
+        mount_if_still_current(video_play_url, sidecar)
         -- 有平级字幕时不扫描文件夹（平级优先级更高）
         return
     end
 
     -- 2) 平级无匹配，尝试字幕文件夹
-    M.attach_subs_from_folders(vname)
+    M.attach_subs_from_folders(vname, video_play_url)
 end
 
 return M
