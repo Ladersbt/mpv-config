@@ -56,6 +56,31 @@ end
 
 -- ======== 字幕文件夹扫描（通过 curl PROPFIND，异步） ========
 
+--- 从完整 URL 反解服务器上下文（protocol/domain/凭据）。
+--- 字幕扫描由 file-loaded 触发，此时 play_url 已带 browse 期写入的凭据快照；
+--- 按 URL 反查比读 state.current_server 可靠——播放旧服务器文件时
+--- （播放列表残留）即使已切服务器，字幕请求仍用对凭据。
+--- 按「服务器根 URL 前缀」匹配（srv.url 带尾斜杠，folder_url 必然以它开头），
+--- 命中多台时取最长前缀——同 host:port 不同根（/dav/A/ vs /dav/B/）不会串。
+local function ctx_from_url(url)
+    local protocol, domain = url:match("^(https?://)([^/]+)")
+    if not protocol or not domain then return nil end
+    local best_ctx, best_srv, best_len = nil, nil, 0
+    for _, srv in ipairs(state.servers or {}) do
+        local ctx = options.server_ctx(srv)
+        if ctx then
+            -- match_url 带尾斜杠（缺则补），folder_url 若属于这台必然以它为前缀
+            local prefix = ctx.match_url
+            if url:sub(1, #prefix) == prefix and #prefix > best_len then
+                best_ctx, best_srv, best_len = ctx, srv, #prefix
+            end
+        end
+    end
+    if best_ctx then return best_ctx, best_srv end
+    -- 列表里找不到（URL 不属于任何已知服务器根）：无凭据的裸 ctx，公开目录仍可用
+    return { protocol = protocol, domain = domain, auth_prefix = protocol .. domain }, nil
+end
+
 --- 解析 PROPFIND 响应，返回字幕文件列表（同步纯解析，不发请求）。
 --- @param ok boolean command_native_async 回调的 ok
 --- @param res table|nil subprocess 结果
@@ -71,6 +96,9 @@ local function parse_sub_props(ok, res, folder_url)
     end
     local http_code = tonumber(http_code_str) or 0
     if http_code ~= 207 then return {} end
+
+    local ctx = ctx_from_url(folder_url)
+    if not ctx then return {} end
 
     local folder_path_decoded = utils.url_decode(folder_url:match("https?://[^/]+(/.*)") or "/")
     local norm_folder = folder_path_decoded:gsub("/$", "")
@@ -99,8 +127,8 @@ local function parse_sub_props(ok, res, folder_url)
         if ext and options.sub_exts[ext:lower()] then
             table.insert(subs, {
                 name     = name,
-                play_url = options.auth_prefix .. raw_href,
-                file_url = options.protocol .. options.domain .. raw_href,
+                play_url = ctx.auth_prefix .. raw_href,
+                file_url = ctx.protocol .. ctx.domain .. raw_href,
             })
         end
 
@@ -113,16 +141,35 @@ end
 --- 异步扫描单个字幕文件夹，完成后 callback(subs)。
 --- 不阻塞 file-loaded：视频先播，字幕扫描结果晚到再挂载。
 local function scan_sub_folder_async(folder_url, callback)
+    -- 凭据随 URL 走（见 ctx_from_url 注释），不读 state.current_server
+    local ctx, srv = ctx_from_url(folder_url)
+    if not ctx then
+        callback({})
+        return
+    end
     local args = {
         "curl", "-s",
         "--connect-timeout", "5",
         "-w", "\n---HTTP_CODE---%{http_code}",
         "-X", "PROPFIND",
-        "-u", options.opts.user .. ":" .. options.opts.pass,
-        "-H", "Depth: 1",
-        "--max-time", "10",
-        folder_url
     }
+    -- 反查不到服务器（URL 不属于任何已知根）、或反查到的那台本来就没有凭据时，
+    -- 都不附 -u——空凭据（":"）等于匿名，发不发认证头行为一样，但显式省略更干净。
+    --
+    -- 凭据取 ctx.user/pass 而不是 srv.user/pass：
+    -- 老配置可能把凭据写在 url 里（http://user:pass@host/）而 user/pass
+    -- 字段留空，此时 folder_url 是用 ctx.domain（已剥净）拼的；若仍读 srv 字段会拿到
+    -- 空串 → 匿名 → 字幕 PROPFIND 401 → parse_sub_props 判 http_code ~= 207 直接返回空
+    -- → 用户看到「字幕文件夹在但扫不出字幕」，且无任何报错或日志提示。
+    if srv and (ctx.user ~= "" or ctx.pass ~= "") then
+        table.insert(args, "-u")
+        table.insert(args, ctx.user .. ":" .. ctx.pass)
+    end
+    table.insert(args, "-H")
+    table.insert(args, "Depth: 1")
+    table.insert(args, "--max-time")
+    table.insert(args, "10")
+    table.insert(args, folder_url)
 
     mp.command_native_async({
         name = "subprocess",

@@ -19,7 +19,17 @@ function M.play_file(play_url)
     if not state.file_loaded_registered then
         mp.register_event("file-loaded", function()
             local path = mp.get_property("path") or ""
-            if not path:find(options.domain, 1, true) then return end
+            -- 多服务器：path 匹配任一服务器的 domain 即视为本 WebDAV 来源。
+            -- 不能只匹配 current_server——播放列表可能残留切服务器之前加载的条目。
+            local is_webdav = false
+            for _, srv in ipairs(state.servers or {}) do
+                local ctx = options.server_ctx(srv)
+                if ctx and path:find(ctx.domain, 1, true) then
+                    is_webdav = true
+                    break
+                end
+            end
+            if not is_webdav then return end
 
             subtitle_mod.attach_subs_for(path)
 

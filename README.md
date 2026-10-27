@@ -7,9 +7,9 @@
 <details>
 <summary>点击展开脚本说明</summary>
 
-### `autocopyshot.lua`
+### [`autocopyshot.lua`](scripts/autocopyshot.lua)
 * **功能描述**：在触发`mpv`原生视频截图的同时复制到系统剪贴板
-* **`input.conf`写法示例**：
+* **[`input.conf`](input.conf)写法示例**：
 
 ```ini
 Ctrl+c      script-message screenshot-subtitles-copy   #menu: 截取 > 截屏 > Autocopyshot > 同源尺寸 - 有字幕 - 无 OSD-单帧
@@ -19,77 +19,77 @@ Ctrl+alt+c  script-message screenshot-video-copy       #menu: 截取 > 截屏 > 
 Ctrl+shift+c script-message screenshot-window-copy     #menu: 截取 > 截屏 > Autocopyshot > 实际尺寸 - 有字幕 - 有 OSD-单帧
 ```
 
-### `bangumi_sync`
+### [`bangumi_sync`](scripts/bangumi_sync)
 * **来源**：[x-Armin/mpv_bangumi_sync](https://github.com/x-Armin/mpv_bangumi_sync)
 * **功能描述**：基于`uosc`框架，同步和回传 Bangumi 观看记录
-* **`input.conf`写法示例**：参考原仓库说明
+* **[`input.conf`](input.conf)写法示例**：参考原仓库说明
 
-### `clock.lua`
+### [`clock.lua`](scripts/clock.lua)
 * **功能描述**：实现时钟效果，显示当前系统时间、观看当前视频还需时间及视频结束时间
-* **`input.conf`写法示例**：
+* **[`input.conf`](input.conf)写法示例**：
 
 ```ini
 t                 script-message-to clock toggle                                                                       #menu: 其他 > 开启/关闭 时间显示
 ```
 
-### `cut_sub.lua`
+### [`cut_sub.lua`](scripts/cut_sub.lua)
 * **功能描述**：裁剪与视频同目录下近似名称的字幕和弹幕文件
-* **`input.conf`写法示例**：
+* **[`input.conf`](input.conf)写法示例**：
 
 ```ini
 #                script-message cut_sub_ab                                                                              #menu: 截取 > 字幕&弹幕 > 标记 A/B 点
 #                script-message cut_sub_clear                                                                           #menu: 截取 > 字幕&弹幕 > 清除标记
 ```
 
-### `dir_subs.lua`
+### [`dir_subs.lua`](scripts/dir_subs.lua)
 * **功能描述**：记录和恢复视频的字幕大小和位置状态，会影响同目录下所有视频的字幕状态
 
-### `embedded-lyrics.lua`
+### [`embedded-lyrics.lua`](scripts/embedded-lyrics.lua)
 * **功能描述**：自动提取音乐文件中的内嵌歌词并以字幕形式加载
-* **`input.conf`写法示例**：
+* **[`input.conf`](input.conf)写法示例**：
 
 ```ini
 #                script-message embedded-lyrics-toggle                                                                  #menu: 功能 > 歌词 > 开/关 自动加载内嵌歌词
 #                script-message embedded-lyrics-save                                                                    #menu: 功能 > 歌词 > 提取并保存内嵌歌词
 ```
 
-### `extract_fonts.lua`
+### [`extract_fonts.lua`](scripts/extract_fonts.lua)
 * **功能描述**：导出视频中的内封字体
-* **`input.conf`写法示例**：
+* **[`input.conf`](input.conf)写法示例**：
 
 ```ini
 Ctrl+S           script-binding extract-fonts                                                                           #menu: 截取 > 视频 > 提取MKV视频内封字体
 ```
 
-### `music-reset.lua`
+### [`music-reset.lua`](scripts/music-reset.lua)
 * **功能描述**：检测到带封面的音频文件时，自动将播放进度重置到开头，解决历史记录脚本对音乐文件恢复进度的问题
 
-### `skip_sponsorblock.lua`
+### [`skip_sponsorblock.lua`](scripts/skip_sponsorblock.lua)
 * **功能描述**：参考上游 [chapterskip.lua](https://github.com/dyphire/mpv-config/blob/master/scripts/chapterskip.lua) 与 [sponsorblock_minimal.lua](https://github.com/dyphire/mpv-config/blob/master/scripts/sponsorblock_minimal.lua)，实现流媒体播放时识别 B 站和 YouTube 的各种特殊片段，插入章节信息并提供交互按钮。可配合油猴脚本 [play-with-mpv](https://github.com/Ladersbt/userscript/tree/main/play-with-mpv)（参考修改自 [akiirui/userscript](https://github.com/akiirui/userscript/tree/main/play-with-mpv) 和 [LuckyPuppy514/external-player](https://github.com/LuckyPuppy514/external-player)）使用，在上游基础上增加了若干功能并调整了 UI
 
-### `speed_manager.lua`
+### [`speed_manager.lua`](scripts/speed_manager.lua)
 * **功能描述**：记录和恢复播放速度，支持回档至上次速度
-* **`input.conf`写法示例**：
+* **[`input.conf`](input.conf)写法示例**：
 
 ```ini
 KP1              script-message toggle_speed; script-message-to uosc flash-speed                                        #menu: 播放 > 速度调整 > 速度 重置/恢复
 ```
 
-### `sub_export.lua`
+### [`sub_export.lua`](scripts/sub_export.lua)
 * **功能描述**：在上游 [sub_export.lua](https://github.com/dyphire/mpv-config/blob/master/scripts/sub_export.lua) 基础上实现导出 SRT 字幕的同时自动转换并生成一份 ASS 字幕
-* **`input.conf`写法示例**：
+* **[`input.conf`](input.conf)写法示例**：
 
 ```ini
 CTRL+s           script-message-to sub_export export-selected-subtitles                                                 #menu: 字幕 > 导出当前内封字幕
 ```
 
-### `uosc`
+### [`uosc`](scripts/uosc)
 * **来源**：整合 [上游](https://github.com/dyphire/mpv-config/tree/master/scripts/uosc) 和 [hooke007/mpv_PlayKit](https://github.com/hooke007/mpv_PlayKit/tree/main/portable_config/scripts/uosc) 特性
 
-### `uosc_webdav`
+### [`uosc_webdav`](scripts/uosc_webdav)
 * **来源**：参考修改自 [webdav.lua](https://gist.github.com/HedioKojima/fdbfdd73570650b01c809afb5ae7829b)
 * **功能描述**：基于`uosc`框架，实现 WebDAV 目录浏览与播放功能，支持多种排序、批量删除、外挂字幕自动匹配与内封字幕自动选轨、全目录连播列表、菜单实时搜索等；菜单支持方向键导航（右键激活选中项、左键/退格返回上一级）
-* **`input.conf`写法示例**：
+* **[`input.conf`](input.conf)写法示例**：
 
 ```ini
 #                script-message open-webdav                                                                             #menu: 导航 > WebDAV > 打开 WebDAV 目录
@@ -100,20 +100,22 @@ c                script-message webdav-cycle-sort                               
 #                script-message webdav-toggle-video-only                                                                #menu: 导航 > WebDAV > 开/关 仅播放视频
 ```
 
-> **Note**: 已由群组版本替代
+> **Note**: 已由群组版本替代（[`scripts/uosc_webdav/`](scripts/uosc_webdav) 目录）
+>
+> 群组版本新增**模块依赖**：公共写盘模块 [`script-modules/conf-persist.lua`](script-modules/conf-persist.lua)——菜单里改动的开关（默认服务器、仅播放视频、改动持久化等）由它原位写回 [`script-opts/uosc_webdav.conf`](script-opts/uosc_webdav.conf)。部署时需连同 [`script-modules/`](script-modules) 目录一起放置，缺失该模块会导致脚本加载失败。
 
-### `uosc_history`
+### [`uosc_history`](scripts/uosc_history)
 * **来源**：[Koopex/uosc_history_menu](https://github.com/Koopex/uosc_history_menu)
-* **功能描述**：基于`uosc`框架，实现历史记录与收藏夹功能；收藏夹独立存储于单独文件（`script-opts/uosc_history.conf` 中可配置路径），便于手动预设与编辑；搜索支持 `*` 通配符
+* **功能描述**：基于`uosc`框架，实现历史记录与收藏夹功能；收藏夹独立存储于单独文件（[`script-opts/uosc_history.conf`](script-opts/uosc_history.conf) 中可配置路径），便于手动预设与编辑；搜索支持 `*` 通配符
 * **收藏夹迁移逻辑**：
   * 首次运行（无任何文件）：空收藏，退出后生成历史与收藏两个独立文件
   * 迁移场景（旧文件含收藏、新收藏文件不存在）：自动从旧文件加载收藏，退出时写入新文件
   * 向后兼容：`storage.load()` 仍返回旧文件中的 `bookmark_entries` 作为迁移回退源；`storage.save()` 不再写入该字段，首次保存后历史文件中的旧收藏数据自动清理
-* **`input.conf`写法示例**：参考原仓库说明
+* **[`input.conf`](input.conf)写法示例**：参考原仓库说明
 
-> **Note**: 已由群组版本替代
+> **Note**: 已由群组版本替代（[`scripts/uosc_history/`](scripts/uosc_history) 目录）
 
-### `winisland.lua`
+### [`winisland.lua`](scripts/winisland.lua)
 * **功能描述**：与 [WinIsland](https://github.com/Eatgrapes/WinIsland) 联动以在 mpv 播放音乐时实现类似手机音乐软件的灵动岛效果
 
 </details>

@@ -1,7 +1,6 @@
 -- modules/options.lua — 配置与常量
 
 local opt = require 'mp.options'
-local msg = require 'mp.msg'
 
 local M = {}
 
@@ -12,6 +11,13 @@ M.opts = {
     pass = "password",
     default_sort = "name_asc",
     video_only = true,
+    -- 多服务器（servers.json 的读取归一化见 modules/servers.lua）：
+    -- persist_changes：菜单更改是否写盘（read_options 只认 yes/no，写错静默回落默认值）。
+    --   可在服务器列表菜单勾选「💾 改动持久化」切换；开关自身状态始终写盘、不受门控
+    --   （main.lua webdav-toggle-persist，防门控自锁）。默认 yes。
+    -- default_server：默认直入的服务器 name（留空 = 多服务器时先显示列表；单服务器恒直入）
+    persist_changes = true,
+    default_server = "",
 }
 
 opt.read_options(M.opts, "uosc_webdav")
@@ -69,11 +75,49 @@ M.month_map = {
     Jul=7, Aug=8, Sep=9, Oct=10, Nov=11, Dec=12
 }
 
--- 派生的 URL 片段
-M.protocol, M.domain = M.opts.url:match("^(https?://)([^/]+)")
-if not M.protocol or not M.domain then
-    msg.error("WebDAV URL 配置无效: " .. tostring(M.opts.url))
+--- 按服务器表求派生量（协议/主机/凭据前缀）。
+--- 多服务器下这些是运行时值：每次请求/删除/字幕扫描按「发起时的那台服务器」求值，
+--- 不做加载期常量（旧单文件版的 auth_prefix 是加载期一次算好，切服务器后会用错凭据）。
+--- 返回 nil 表示 url 非法；调用方对单次操作缓存结果，不要在热路径上重复算。
+--- match_url：url 缺尾斜杠时补一个（仅供字幕反查的前缀匹配，不写回 srv），
+--- 防 conf 回退条目缺斜杠时长短前缀误配。
+---
+--- url 内嵌 userinfo（老配置可能有，curl 能用它认证）在这里**规范化剥离**，
+--- 凭据优先取 srv.user/pass，缺失时回落到 URL 里的。不剥的后果很严重：
+---   · auth_prefix 拼出两份凭据 → play_url 畸形 → mpv 播放直接失败（curl bad format）
+---   · domain 带凭据 → 菜单 hint 明文显示密码
+---   · auth_prefix 不再是 match_url 前缀 → 字幕反查必然失败
+--- @param srv {url:string, user:string, pass:string}
+--- @return {protocol:string, domain:string, user:string, pass:string, auth_prefix:string, match_url:string}|nil
+function M.server_ctx(srv)
+    if type(srv) ~= "table" or type(srv.url) ~= "string" then return nil end
+    local protocol, rest = srv.url:match("^(https?://)(.*)$")
+    if not protocol or rest == "" then return nil end
+    -- userinfo 只可能出现在第一个 / 之前
+    local authority, path = rest:match("^([^/?#]*)(.*)$")
+    local url_user, url_pass = "", ""
+    local domain = authority
+    local at = authority:find("@", 1, true)
+    if at then
+        local creds = authority:sub(1, at - 1)
+        domain = authority:sub(at + 1)
+        local u, p = creds:match("^([^:]*):(.*)$")
+        if u then url_user, url_pass = u, p else url_user = creds end
+    end
+    if domain == "" then return nil end
+    -- 显式配置的账号密码优先；没配时用 URL 里带的
+    local user = (srv.user ~= nil and srv.user ~= "") and srv.user or url_user
+    local pass = (srv.pass ~= nil and srv.pass ~= "") and srv.pass or url_pass
+    local match_url = protocol .. domain .. path
+    if match_url:sub(-1) ~= "/" then match_url = match_url .. "/" end
+    return {
+        protocol = protocol,
+        domain = domain,
+        user = user,
+        pass = pass,
+        auth_prefix = protocol .. user .. ":" .. pass .. "@" .. domain,
+        match_url = match_url,
+    }
 end
-M.auth_prefix = M.protocol .. M.opts.user .. ":" .. M.opts.pass .. "@" .. M.domain
 
 return M

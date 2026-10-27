@@ -31,7 +31,9 @@ function M.cancel_loading()
 end
 
 --- 异步 PROPFIND 结果处理：成功更新状态并原地刷新菜单，失败渲染错误态菜单。
-local function handle_propfind_result(target_url, ok, res)
+--- ctx 为发起请求时的服务器派生量快照（闭包捕获——
+--- 等待响应期间用户可能已切换服务器，回调时刻的 state 属于新服务器）。
+local function handle_propfind_result(target_url, ctx, ok, res)
     if not ok or res.status ~= 0 then
         local code = ok and res.status or -1
         local hint
@@ -104,7 +106,7 @@ local function handle_propfind_result(target_url, ok, res)
                 table.insert(new_items, {
                     is_dir  = true,
                     name    = name,
-                    url     = options.protocol .. options.domain .. raw_href,
+                    url     = ctx.protocol .. ctx.domain .. raw_href,
                     lastmod = lastmod_str
                 })
             else
@@ -118,8 +120,8 @@ local function handle_propfind_result(target_url, ok, res)
                 table.insert(new_items, {
                     is_dir   = false,
                     name     = name,
-                    play_url = options.auth_prefix .. raw_href,
-                    file_url = options.protocol .. options.domain .. raw_href,
+                    play_url = ctx.auth_prefix .. raw_href,
+                    file_url = ctx.protocol .. ctx.domain .. raw_href,
                     lastmod  = lastmod_str,
                     size     = size_str,
                     is_video = is_video,
@@ -144,9 +146,11 @@ local function handle_propfind_result(target_url, ok, res)
     state.dir_cursor[target_url] = nil
     sort_mod.apply_sort()
 
-    -- 菜单仍开着（spinner 占位被原地替换）；若用户已 Esc 关闭则只更新数据，
-    -- 不强制重开——menu_is_open 由 uosc close 事件同步，可信。
-    if state.menu_is_open then
+    -- 菜单仍开着（spinner 占位被原地替换）才渲染；用户已 Esc 关闭则只更新数据，
+    -- 不强制重开。这里实时读 user-data/uosc/menu/type：异步回调时刻读属性是准确的
+    -- （不在 close 回调时机内），而经由 state 缓存一个布尔副本会因 close 事件的
+    -- 竞态误判。原 state.menu_is_open 已彻底移除。
+    if mp.get_property_native("user-data/uosc/menu/type") == "webdav_browser" then
         ui.render()
     end
 end
@@ -154,6 +158,23 @@ end
 --- silent=true：不渲染 spinner 占位（供删除完成后的后台刷新使用）——
 --- 菜单已关时不强开（数据到达后本就有"菜单没开就不渲染"守卫），菜单开着则原地换新列表。
 function M.open_webdav_url(target_url, force_refresh, silent)
+    if not state.current_server then
+        mp.osd_message("⚠️ 请先选择服务器", 2)
+        return
+    end
+    -- 发起时快照服务器派生量：异步回调到达时用户可能已切服务器，
+    -- 闭包捕获保证 URL 拼接/凭据都用「发起时的那台」
+    local ctx = options.server_ctx(state.current_server)
+    if not ctx then
+        mp.osd_message("❌ 当前服务器 URL 非法", 3)
+        return
+    end
+
+    -- 任何新打开（含缓存命中）都必须先取消在途请求——旧请求的迟到回调
+    -- 会无条件覆盖 current_loaded_url/cached_dir_items（见 handle_propfind_result），
+    -- 缓存命中分支若提前 return 会留下这个覆盖窗口
+    M.cancel_loading()
+
     if not force_refresh and state.dir_cache[target_url] then
         state.cached_dir_items = utils.copy_items(state.dir_cache[target_url].items)
         state.current_loaded_url = target_url
@@ -161,14 +182,10 @@ function M.open_webdav_url(target_url, force_refresh, silent)
         state.is_delete_mode = false
         state.selected_files = {}
         state.selected_dirs = {}
-        state.menu_is_open = false
         sort_mod.apply_sort()
         ui.render()
         return
     end
-
-    -- 新请求取代在途请求（用户快速连续点击目录）
-    M.cancel_loading()
 
     -- 立即渲染 spinner 占位菜单；若菜单已开则原地 update，全程不闪断
     if not silent then
@@ -180,7 +197,9 @@ function M.open_webdav_url(target_url, force_refresh, silent)
         "--connect-timeout", "5",
         "-w", "\n---HTTP_CODE---%{http_code}",
         "-X", "PROPFIND",
-        "-u", options.opts.user .. ":" .. options.opts.pass,
+        -- 凭据走 ctx 快照（发起时的那台），不读 state.current_server——
+        -- 与 URL 拼接保持同一来源，结构上保证「凭据跟随 URL」
+        "-u", ctx.user .. ":" .. ctx.pass,
         "-H", "Depth: 1",
         "--max-time", "10",
         target_url
@@ -188,7 +207,8 @@ function M.open_webdav_url(target_url, force_refresh, silent)
 
     loading_gen = loading_gen + 1
     local my_gen = loading_gen
-    state.loading = { url = target_url, gen = my_gen, abort = nil }
+    -- 第二道防线：记录请求属于哪台服务器，回调里双重校验（代际 + 服务器身份）
+    state.loading = { url = target_url, gen = my_gen, abort = nil, srv = state.current_server }
     local handle, err = mp.command_native_async({
         name = "subprocess",
         playback_only = false,
@@ -196,10 +216,13 @@ function M.open_webdav_url(target_url, force_refresh, silent)
         capture_stderr = true,
         args = args
     }, function(ok, res)
-        -- 守卫：代际不匹配（请求已被取消或被更新请求取代，含同 URL 重发）则静默丢弃
+        -- 守卫：代际不匹配（请求已被取消或被更新请求取代，含同 URL 重发）
+        -- 或服务器已切换（select_server 的 cancel_loading 先清了 state.loading，
+        -- 这里是兜底——abort 后回调仍会被投递 killed 结果）则静默丢弃
         if not state.loading or state.loading.gen ~= my_gen then return end
+        if state.loading.srv ~= state.current_server then return end
         state.loading = nil
-        handle_propfind_result(target_url, ok, res)
+        handle_propfind_result(target_url, ctx, ok, res)
     end)
 
     if not handle then

@@ -18,12 +18,36 @@ function M.init(s, refresh_callback, progress_callback, result_callback)
     render_result_fn = result_callback
 end
 
-function M.webdav_delete_async(url, is_dir, cb)
+--- 发起 DELETE。凭据按 srv 参数显式传入（批量任务快照）或回落当前服务器。
+--- 快照入 args 后飞行期间用户切服务器不影响在途请求。
+--- @param srv 可选；不传则用 state.current_server（单删路径），
+---        批量删除必须传 delete_job.srv（整批任务的凭据快照）
+function M.webdav_delete_async(url, is_dir, cb, srv)
+    srv = srv or state.current_server
+    if not srv then
+        cb(false)
+        return
+    end
+    -- 凭据必须经 server_ctx 归一化，不能直接读 srv.user/srv.pass。
+    -- 原因：老配置可能把凭据写在 url 里（http://user:pass@host/）
+    -- 而 user/pass 字段留空。server_ctx 会把 url 的 userinfo 剥进 ctx.user/ctx.pass，
+    -- 而 file_url 是用 ctx.domain（已剥净）拼的——此时若仍读 srv.user/pass 就会拿到空串，
+    -- curl 收到 "-u :" 等于匿名，DELETE 直接 401（用户看到「删除失败」）。
+    -- url 里残留的 userinfo 会被 curl 优先用于认证，所以这个坑此前并不显现。
+    local ctx = options.server_ctx(srv)
+    if not ctx then
+        cb(false)
+        return
+    end
     local args = {
-        "curl", "-s", "-o", "/dev/null",
-        "-w", "%{http_code}",
+        -- 不用 -o /dev/null：mpv 调起的是 Windows 原生 curl.exe，它把 /dev/null
+        -- 当普通路径去写并返回退出码 23（写 body 失败）。注意 mpv 回调的 ok 仍为 true、
+        -- -w 状态码仍进 stdout，所以旧写法并不会真的判失败；
+        -- 去掉只是更干净，正文与状态码靠 -w 尾标记切分（与 browse.lua 的 PROPFIND 同款）
+        "curl", "-s",
+        "-w", "\n---HTTP_CODE---%{http_code}",
         "-X", "DELETE",
-        "-u", options.opts.user .. ":" .. options.opts.pass,
+        "-u", ctx.user .. ":" .. ctx.pass,
     }
     if is_dir then
         table.insert(args, "-H")
@@ -37,7 +61,7 @@ function M.webdav_delete_async(url, is_dir, cb)
         capture_stdout = true,
         args = args
     }, function(ok, res)
-        local code = tonumber((res and res.stdout or ""):match("^%s*(%d+)%s*$")) or 0
+        local code = tonumber((res and res.stdout or ""):match("---HTTP_CODE---(%d+)%s*$")) or 0
         cb(ok and (code == 200 or code == 204 or code == 207))
     end)
 end
@@ -76,7 +100,7 @@ function M.cancel_delete()
 end
 
 function M.execute_delete()
-    -- F9 后用户可 Esc 关闭进度菜单再发起新批量：静默吞掉会显得"确认了却没反应"
+    -- 用户可 Esc 关闭进度菜单再发起新批量：静默吞掉会显得"确认了却没反应"
     if state.delete_job.active then
         mp.osd_message("⚠️ 批量删除进行中，请稍候", 2)
         return
@@ -102,6 +126,11 @@ function M.execute_delete()
     state.delete_job.success = 0
     state.delete_job.fail    = 0
     state.delete_job.queue   = delete_list
+    -- 整批任务的凭据快照（不是每请求一次）——飞行期间切服务器，
+    -- 队列剩余项仍用「发起时的那台」的凭据（URL 也属于那台，两者一致）。
+    -- 注：select_server 现已直接取消进行中的批量删除（active=false），
+    -- 这个快照是第二道防线（取消前的在途单项仍用对凭据）。
+    state.delete_job.srv     = state.current_server
     state.delete_job.menu_dismissed = false  -- 新任务开始，允许进度/结果菜单重新显示
 
     state.is_delete_mode = false
@@ -151,6 +180,7 @@ function M.execute_delete()
         msg.info(string.format("DELETE %s: %s",
             item.is_dir and "dir" or "file", item.url))
 
+        -- 凭据用任务级快照（delete_job.srv），不读实时 state.current_server
         M.webdav_delete_async(item.url, item.is_dir, function(ok)
             if ok then
                 state.delete_job.success = state.delete_job.success + 1
@@ -160,7 +190,7 @@ function M.execute_delete()
                 msg.warn("删除失败: " .. item.url)
             end
             delete_next()
-        end)
+        end, state.delete_job.srv)
     end
 
     delete_next()
