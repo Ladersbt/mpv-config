@@ -88,7 +88,7 @@ CTRL+s           script-message-to sub_export export-selected-subtitles         
 
 ### [`uosc_webdav`](scripts/uosc_webdav)
 * **来源**：参考修改自 [webdav.lua](https://gist.github.com/HedioKojima/fdbfdd73570650b01c809afb5ae7829b)
-* **功能描述**：基于`uosc`框架，实现 WebDAV 目录浏览与播放功能，支持多种排序、批量删除、外挂字幕自动匹配与内封字幕自动选轨、全目录连播列表、菜单实时搜索等；菜单支持方向键导航（右键激活选中项、左键/退格返回上一级）
+* **功能描述**：基于`uosc`框架，实现 WebDAV 远程目录浏览与播放：多服务器管理（列表切换、`mp.input` 问答录入、剪贴板整串导入、测试连接、`default_server` 直入）、多种排序、批量删除、外挂字幕自动匹配与内封字幕自动选轨、全目录连播列表、菜单实时搜索等；菜单支持方向键导航（右键激活选中项、左键/退格返回上一级）
 * **[`input.conf`](input.conf)写法示例**：
 
 ```ini
@@ -98,11 +98,15 @@ q                script-message webdav-back                                     
 c                script-message webdav-cycle-sort                                                                       #menu: 导航 > WebDAV > 切换 WebDAV 目录排序
 #                script-message webdav-toggle-sync-sort                                                                 #menu: 导航 > WebDAV > 开/关 继承 WebDAV 目录排序
 #                script-message webdav-toggle-video-only                                                                #menu: 导航 > WebDAV > 开/关 仅播放视频
+#                script-message webdav-open-servers                                                                     #menu: 导航 > WebDAV > 管理 WebDAV 服务器
+#                script-message webdav-toggle-persist                                                                   #menu: 导航 > WebDAV > 开/关 改动持久化
 ```
 
-> **Note**: 已由群组版本替代（[`scripts/uosc_webdav/`](scripts/uosc_webdav) 目录）
+* **配置**：[`script-opts/uosc_webdav.conf`](script-opts/uosc_webdav.conf)（开关与默认服务器）+ `script-opts/uosc_webdav_servers.json`（多服务器列表，运行时生成；缺失或损坏时自动回退 conf 里的单服务器配置）
+
+> **Note**: 旧单文件 [`uosc_webdav.lua`](scripts/uosc_webdav.lua) 已由群组版本（[`scripts/uosc_webdav/`](scripts/uosc_webdav) 目录）替代
 >
-> 群组版本新增**模块依赖**：公共写盘模块 [`script-modules/conf-persist.lua`](script-modules/conf-persist.lua)——菜单里改动的开关（默认服务器、仅播放视频、改动持久化等）由它原位写回 [`script-opts/uosc_webdav.conf`](script-opts/uosc_webdav.conf)。部署时需连同 [`script-modules/`](script-modules) 目录一起放置，缺失该模块会导致脚本加载失败。
+> 群组版本新增**模块依赖**：公共写盘模块 [`script-modules/conf-persist.lua`](script-modules/conf-persist.lua)——菜单里改动的开关由它原位写回 [`script-opts/uosc_webdav.conf`](script-opts/uosc_webdav.conf)。部署时需连同 [`script-modules/`](script-modules) 目录一起放置，缺失时启动会 OSD 报错并给出补拷指引。
 
 ### [`uosc_history`](scripts/uosc_history)
 * **来源**：[Koopex/uosc_history_menu](https://github.com/Koopex/uosc_history_menu)

@@ -35,10 +35,86 @@ end
 
 local msg = require 'mp.msg'
 local mp_utils = require 'mp.utils'
-local options = require "modules.options"
-local utils = require "modules.utils"
-local servers_mod = require "modules.servers"
-local conf_persist = require "conf-persist"
+
+-- ================= 模块加载失败检测 =================
+-- 裸 require 失败会直接抛 Lua error：mpv 只往终端/日志写一行 fatal，屏幕零提示，
+-- 用户按 WebDAV 菜单毫无反应，还以为是自己配置错了（典型场景：漏部署
+-- script-modules/conf-persist.lua，脚本整体阵亡且无任何可见告警）。safe_require
+-- 把它变成显式报错（OSD + error 日志 + 中止加载），并按失败类型给补救指引：
+--   · 外部共享模块（script-modules/，与脚本本体分开部署）→ 提示补拷对应文件；
+--   · 自家 modules/（随 scripts/uosc_webdav/ 整体分发）→ 提示目录拷贝不完整；
+--   · not found 以外（文件在但加载失败，如版本不兼容/语法损坏）→ 提示重新获取模块。
+-- 只报第一个失败：后续模块的失败多半是连锁误报（如 sort.lua 损坏时，依赖它的
+-- menu/browse/playback 只会报 "loop or previous error loading module"，继续报只会
+-- 把根因埋掉）。修好第一个重启后，若有下一个问题会接着报。
+local load_aborted = false
+
+--- @param mod_name string 模块名（"modules.xxx" 或 "conf-persist"）
+--- @return module|nil 成功返回模块；失败返回 nil 且已报错（调用方须立即中止加载）
+local function safe_require(mod_name)
+    -- 前面已有模块失败：这批 require 只为拿齐局部变量名，不再报错
+    if load_aborted then return nil end
+    local ok, mod = pcall(require, mod_name)
+    if ok then return mod end
+    load_aborted = true
+    local err = tostring(mod)
+    -- 从错误里取真正缺失的模块名（require 失败时 err 固定为 module 'X' not found: ...）。
+    -- 不直接用 mod_name：传递依赖缺失时（如 menu.lua 存在但它 require 的 options.lua 缺失）
+    -- 报错点名的是缺失的那个，按它分类才不会给错指引。
+    local missing_mod = err:match("module '([^']+)' not found")
+    local hint
+    if missing_mod then
+        -- 模块名 → 文件路径（require 的点号=目录分隔语义）
+        local file_name = (missing_mod:gsub("%.", "/")) .. ".lua"
+        if missing_mod:find("^modules%.") then
+            hint = "脚本目录不完整（缺 " .. file_name
+                .. "）：请完整拷贝 scripts/uosc_webdav/ 整个目录后重启 mpv"
+        else
+            hint = "缺少共享模块 " .. file_name
+                .. "：请从脚本发布处把它复制到 mpv 配置目录的 script-modules/ 下"
+                .. "（与 scripts/ 平级）后重启 mpv"
+        end
+    else
+        -- 点名 mod_name 但真凶可能是它的传递依赖（如 menu.lua 内部 require 的
+        -- options.lua 损坏），措辞带上「或其依赖项」避免误导修错文件
+        hint = "依赖模块 " .. mod_name .. " 或其依赖项文件存在但加载失败"
+            .. "（版本过旧或损坏）：请更新对应文件后重启 mpv"
+    end
+    msg.error(hint .. "\n原始错误: " .. err)
+    -- 加载期 OSD 可能早于 VO 就绪被吞（mpv 空启动无窗口时更是无处显示），
+    -- 首个 file-loaded 再补一次，保证正常起播场景用户必然看到。
+    -- 不用 unregister_event 自删（派发中自移除的迭代安全性存疑），标志位最稳；
+    -- 报过一次后静默，避免反复起播刷屏。
+    local osd_text = "⚠️ uosc_webdav 未加载：" .. hint
+    local reshowed = false
+    local function reshow_on_playback()
+        if reshowed then return end
+        reshowed = true
+        mp.osd_message(osd_text, 8)
+    end
+    mp.osd_message(osd_text, 8)
+    mp.register_event("file-loaded", reshow_on_playback)
+    return nil
+end
+
+local options = safe_require("modules.options")
+local utils = safe_require("modules.utils")
+local servers_mod = safe_require("modules.servers")
+local conf_persist = safe_require("conf-persist")
+local sort_mod = safe_require("modules.sort")
+local subtitle_mod = safe_require("modules.subtitle")
+local menu_mod = safe_require("modules.menu")
+local browse_mod = safe_require("modules.browse")
+local delete_mod = safe_require("modules.delete")
+local playback_mod = safe_require("modules.playback")
+-- 任一依赖缺失即中止：首个失败已在 safe_require 报过错并置 load_aborted，
+-- 其余 require 静默返回 nil，这里统一挡住后续 nil 解引用。
+-- 全部 require 集中在 conf_writer 创建 / VERSION 广播 / servers_mod.load 等
+-- 任何副作用之前：缺模块时不会先广播版本号、再加载服务器列表、然后才死。
+if not (options and utils and servers_mod and conf_persist and sort_mod
+    and subtitle_mod and menu_mod and browse_mod and delete_mod and playback_mod) then
+    return
+end
 
 -- conf-persist 写盘器：persist_changes=yes 时把 default_server / video_only 等标量开关
 -- 原位写回 script-opts/uosc_webdav.conf（键必须已在 options.opts 声明默认值）。
@@ -115,13 +191,6 @@ local state = {
     dir_cursor = {},
     dir_sort   = {},
 }
-
-local sort_mod = require "modules.sort"
-local subtitle_mod = require "modules.subtitle"
-local menu_mod = require "modules.menu"
-local browse_mod = require "modules.browse"
-local delete_mod = require "modules.delete"
-local playback_mod = require "modules.playback"
 
 --- 选中一台服务器：更新 current_server + 派生量缓存，重置浏览位置到其根目录。
 --- dir_cache/dir_cursor/dir_sort 以完整 URL 为键，不同服务器天然隔离，无需清空。
@@ -690,8 +759,8 @@ local function ask_server_fields()
     local step_prompts = {
         { key = "url",  prompt = "WebDAV 地址（http(s)://…，以 / 结尾）:" },
         { key = "name", prompt = "服务器名称（列表显示名，留空则用地址主机名）:" },
-        { key = "user", prompt = "账号（可留空）:" },
-        { key = "pass", prompt = "密码（可留空，明文显示）:" },
+        { key = "user", prompt = "账号:" },
+        { key = "pass", prompt = "密码:" },
     }
 
     local function ask_next()
